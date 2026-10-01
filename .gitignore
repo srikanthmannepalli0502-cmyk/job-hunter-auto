@@ -1,0 +1,39 @@
+# Environment and secrets
+.env
+
+# Personal profile (copy from profile.example.toml)
+profile.toml
+
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+dist/
+build/
+venv/
+.venv/
+.pytest_cache/
+
+# IDE
+.vscode/
+.idea/
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Resumes (contain personal info)
+resumes/*.docx
+resumes/*.pdf
+resumes/tailored/
+!resumes/.gitkeep
+
+# Job descriptions you paste in for tailoring
+jd/
+
+# Logs
+*.log
+logs/
+
+# Database (your jobs and applications)
+*.db

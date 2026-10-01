@@ -1,0 +1,54 @@
+# Copy to profile.toml (gitignored) and fill in your details.
+
+[candidate]
+name = "Your Name"
+linkedin_url = "https://www.linkedin.com/in/your-profile"
+base_resume = "resumes/base_resume.pdf"   # .pdf or .docx
+output_dir = "resumes/tailored"
+
+# Text the tailored resume must keep (project names, certifications, ...).
+must_keep = [
+  "Example Project Name",
+  "Example Certification",
+]
+
+[search]
+query = "data analyst"
+location = "New York, NY"     # empty string = anywhere in the country
+country = "us"                # Adzuna country code
+max_results = 25
+max_days_old = 14
+include_remote = true         # also search Remotive's remote jobs
+exclude_keywords = ["senior", "lead", "director", "principal"]
+min_score = 40                # skip jobs that score below this (0-100)
+
+[scoring]
+# Earlier titles score higher.
+preferred_titles = [
+  "data analyst",
+  "analytics engineer",
+  "business intelligence",
+  "data engineer",
+  "business analyst",
+]
+
+[scoring.keywords]
+# keyword = weight; matched against the title + description
+sql = 5
+python = 5
+tableau = 4
+"power bi" = 4
+excel = 3
+etl = 4
+snowflake = 4
+dbt = 3
+"data warehouse" = 3
+dashboard = 3
+azure = 2
+aws = 2
+
+[scoring.locations]
+# location substring = points (doubled, capped at 20)
+remote = 8
+"new york" = 6
+hybrid = 5
