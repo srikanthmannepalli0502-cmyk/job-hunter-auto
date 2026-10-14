@@ -26,10 +26,17 @@ class AdzunaSource(JobSource):
             self.logger.warning("ADZUNA_APP_ID / ADZUNA_APP_KEY not set; skipping Adzuna.")
             return []
 
+        jobs = []
+        for query in search.all_queries:
+            jobs.extend(self._search(search, query))
+        self.logger.info(f"Adzuna: {len(jobs)} jobs for {len(search.all_queries)} queries")
+        return jobs
+
+    def _search(self, search: SearchConfig, query: str) -> list[JobListing]:
         params = {
             "app_id": self.app_id,
             "app_key": self.app_key,
-            "what": search.query,
+            "what": query,
             "results_per_page": min(search.max_results, 50),
             "max_days_old": search.max_days_old,
             "sort_by": "date",
@@ -40,9 +47,7 @@ class AdzunaSource(JobSource):
 
         resp = self.client.get(API_URL.format(country=search.country, page=1), params=params)
         resp.raise_for_status()
-        jobs = [self._parse(item) for item in resp.json().get("results", [])]
-        self.logger.info(f"Adzuna: {len(jobs)} jobs")
-        return jobs
+        return [self._parse(item) for item in resp.json().get("results", [])]
 
     @staticmethod
     def _parse(item: dict) -> JobListing:

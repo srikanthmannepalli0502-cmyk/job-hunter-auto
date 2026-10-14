@@ -20,7 +20,7 @@ class RemotiveSource(JobSource):
     """Remotive public API for remote jobs (no key needed).
 
     Remotive asks API users to link back to the original posting and credit Remotive,
-    and to keep request volume low; one search per run is well within that.
+    and to keep request volume low; a few searches per run are well within that.
     """
 
     name = "remotive"
@@ -28,10 +28,12 @@ class RemotiveSource(JobSource):
     def fetch(self, search: SearchConfig) -> list[JobListing]:
         if not search.include_remote:
             return []
-        resp = self.client.get(API_URL, params={"search": search.query, "limit": search.max_results})
-        resp.raise_for_status()
-        jobs = [self._parse(item) for item in resp.json().get("jobs", [])]
-        self.logger.info(f"Remotive: {len(jobs)} jobs")
+        jobs = []
+        for query in search.all_queries:
+            resp = self.client.get(API_URL, params={"search": query, "limit": search.max_results})
+            resp.raise_for_status()
+            jobs.extend(self._parse(item) for item in resp.json().get("jobs", []))
+        self.logger.info(f"Remotive: {len(jobs)} jobs for {len(search.all_queries)} queries")
         return jobs
 
     @staticmethod

@@ -31,6 +31,33 @@ flowchart LR
 | **Fit to one page** | Renders the PDF and measures how full the page is. If it overflows, it removes one wrapped line at a time from the bullet that loses the fewest words. If it's under 85% full, it asks the LLM for more detail. |
 | **Track** | Stores jobs and applications in SQLite; update status as you hear back (interview, offer, rejected...). |
 
+## H-1B sponsorship
+
+Every job also gets an **H-1B sponsor score** (0-100) from the
+[H-1B Tech Jobs Tracker](https://github.com/srikanthmannepalli0502-cmyk/h1b-job-market-tracker):
+`data/h1b_sponsors.csv` lists 30,000+ employers with their certified H-1B LCA filings
+(U.S. Department of Labor, Oct 2024 - Jun 2026) by role group, how many months they filed in,
+new H-1B hires, and USCIS new-hire denial rates.
+
+- The posting's company name is matched to the filings: exact legal names, brand names
+  ("Capital One" -> Capital One Services, LLC), "d/b/a" names, and a few abbreviations (EY, PwC).
+  When the match isn't exact, the note names the employer it matched so you can check it.
+- **Score:** filings in your target roles (40), all filings (15), months with filings (15),
+  new H-1B hires (15), USCIS new-hire approval (15).
+- **Ranking:** `overall = fit x (1 - weight) + sponsor x weight`, with `weight` (default 35) in
+  `[sponsorship]` in profile.toml. Set `hide_non_sponsors = true` to drop companies with no filings.
+
+```bash
+python -m jobhunter sponsor "Capital One"      # look up any company
+python -m jobhunter list --sponsors-only       # hide companies with no H-1B filings
+```
+
+To refresh the data after a new DOL release, run `python -m pipeline.export_sponsors --out
+<path to this repo>/data/h1b_sponsors.csv` in the tracker repo.
+
+An LCA filing shows that an employer sponsored the role, not that it will sponsor you; and this is
+not legal or immigration advice.
+
 ## Setup
 
 Requires Python 3.11+.
@@ -64,6 +91,7 @@ python -m jobhunter tailor 12 --jd-file jd/acme.txt   # ...using the full postin
 python -m jobhunter open 12                # open posting, then log that you applied
 python -m jobhunter status 3 interview --notes "Phone screen Mon"
 python -m jobhunter applications           # your application history
+python -m jobhunter sponsor "Capital One"   # H-1B sponsorship of a company
 ```
 
 **Tip:** Adzuna's API returns a shortened description. For the best tailoring, copy the full
@@ -79,6 +107,7 @@ jobhunter/
 ├── config.py           # .env settings + profile.toml loader
 ├── models.py           # JobListing
 ├── scoring.py          # 0-100 job scoring
+├── sponsors.py         # H-1B sponsor matching and score
 ├── tracker.py          # SQLAlchemy models + job/application store
 ├── llm.py              # Groq client with rate-limit retries
 ├── sources/

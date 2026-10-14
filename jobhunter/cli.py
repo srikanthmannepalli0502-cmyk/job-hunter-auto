@@ -6,6 +6,7 @@
     python -m jobhunter open JOB_ID            open the posting, then log that you applied
     python -m jobhunter status APP_ID STATUS   update an application (interview, offer, ...)
     python -m jobhunter applications           show your application history
+    python -m jobhunter sponsor "COMPANY"      look up a company's H-1B sponsorship
 """
 
 import argparse
@@ -17,6 +18,7 @@ from loguru import logger
 
 from jobhunter.config import DEFAULT_PROFILE_PATH, load_profile, settings
 from jobhunter.scoring import rank_jobs
+from jobhunter.sponsors import SponsorDB, apply_sponsorship, describe, sponsor_score
 from jobhunter.sources import AdzunaSource, RemotiveSource, dedupe
 from jobhunter.sources.base import is_excluded
 from jobhunter.tracker import STATUSES, Tracker
@@ -33,9 +35,12 @@ def print_jobs(jobs) -> None:
         print("No jobs to show.")
         return
     for job in jobs:
-        print(f"[{job.id:>4}] {job.match_score:5.1f}  {job.title} @ {job.company}")
+        print(f"[{job.id:>4}] {job.overall_score:5.1f}  {job.title} @ {job.company}")
         details = " | ".join(x for x in (job.location, job.source, _salary(job)) if x)
         print(f"        {details}")
+        if job.sponsor_note:
+            badge = "H-1B ok " if job.sponsor_score > 0 else "NO H-1B "
+            print(f"        {badge}{job.sponsor_score:5.1f}: {job.sponsor_note}  (fit {job.match_score:.0f})")
 
 
 def cmd_search(args, profile, tracker) -> None:
@@ -49,13 +54,14 @@ def cmd_search(args, profile, tracker) -> None:
     jobs = [j for j in dedupe(jobs) if not is_excluded(j, profile.search.exclude_keywords)]
     ranked = rank_jobs(jobs, profile.scoring)
     relevant = [j for j in ranked if j.match_score >= profile.search.min_score]
+    relevant = apply_sponsorship(relevant, SponsorDB.load(profile.sponsorship.data_file), profile.sponsorship)
     new = tracker.save_new(relevant)
     print(f"\nFetched {len(jobs)} jobs, {len(relevant)} scored >= {profile.search.min_score}, {len(new)} new.\n")
-    print_jobs(sorted(new, key=lambda j: j.match_score, reverse=True)[: args.top])
+    print_jobs(sorted(new, key=lambda j: j.overall_score, reverse=True)[: args.top])
 
 
 def cmd_list(args, profile, tracker) -> None:
-    print_jobs(tracker.top_jobs(limit=args.top))
+    print_jobs(tracker.top_jobs(limit=args.top, sponsors_only=args.sponsors_only))
 
 
 def cmd_tailor(args, profile, tracker) -> None:
@@ -115,6 +121,24 @@ def cmd_applications(args, profile, tracker) -> None:
         print(f"#{app.id:<4} {app.status:<10} {app.applied_date:%Y-%m-%d}  {job.title} @ {job.company}")
 
 
+def cmd_sponsor(args, profile, tracker) -> None:
+    db = SponsorDB.load(profile.sponsorship.data_file)
+    if db is None:
+        sys.exit("No sponsor data; see README (H-1B sponsorship).")
+    match = db.match(args.company)
+    if match is None:
+        print(f"{args.company}: no H-1B filings found.")
+        return
+    s, roles = match.sponsor, profile.sponsorship.roles
+    print(f"{s.employer}  (sponsor score {sponsor_score(s, roles)}/100)")
+    print(f"  {describe(match, roles)}")
+    print(f"  by role group: " + ", ".join(f"{k} {v:,}" for k, v in s.role_filings.items()))
+    print(f"  new H-1B hires in the latest fiscal year: {s.new_hires_latest_fy:,}; "
+          f"new-hire share {s.new_hire_share:.0%}")
+    if s.median_wage_data:
+        print(f"  median offered wage, data roles: ${s.median_wage_data:,.0f}")
+
+
 def build_parser() -> argparse.ArgumentParser:
     p = argparse.ArgumentParser(prog="jobhunter", description="Find, score and tailor for jobs.")
     p.add_argument("--profile", type=Path, default=DEFAULT_PROFILE_PATH, help="path to profile.toml")
@@ -126,6 +150,7 @@ def build_parser() -> argparse.ArgumentParser:
 
     s = sub.add_parser("list", help="show top unapplied jobs")
     s.add_argument("--top", type=int, default=15)
+    s.add_argument("--sponsors-only", action="store_true", help="hide companies with no H-1B filings")
     s.set_defaults(func=cmd_list)
 
     s = sub.add_parser("tailor", help="tailor your resume to a job")
@@ -146,6 +171,10 @@ def build_parser() -> argparse.ArgumentParser:
 
     s = sub.add_parser("applications", help="show your application history")
     s.set_defaults(func=cmd_applications)
+
+    s = sub.add_parser("sponsor", help="look up a company's H-1B sponsorship")
+    s.add_argument("company")
+    s.set_defaults(func=cmd_sponsor)
     return p
 
 

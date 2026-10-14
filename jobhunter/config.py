@@ -24,6 +24,7 @@ class Settings:
 @dataclass
 class SearchConfig:
     query: str = "data analyst"
+    queries: list[str] = field(default_factory=list)  # several searches per run; overrides query
     location: str = ""
     country: str = "us"
     max_results: int = 25
@@ -32,12 +33,27 @@ class SearchConfig:
     exclude_keywords: list[str] = field(default_factory=list)
     min_score: float = 0  # jobs scoring below this are not stored
 
+    @property
+    def all_queries(self) -> list[str]:
+        return self.queries or [self.query]
+
 
 @dataclass
 class ScoringConfig:
     keywords: dict[str, int] = field(default_factory=dict)
     preferred_titles: list[str] = field(default_factory=list)
     locations: dict[str, int] = field(default_factory=dict)
+
+
+@dataclass
+class SponsorshipConfig:
+    # Sponsor table exported by the H-1B Tech Jobs Tracker (pipeline/export_sponsors.py).
+    data_file: str = "data/h1b_sponsors.csv"
+    # Role groups whose H-1B filings count most: analyst, data_science, ai, data_engineering, software.
+    roles: list[str] = field(default_factory=lambda: ["analyst", "data_science", "ai"])
+    # Share (0-100) of the overall score that comes from sponsorship; the rest is skills/title/location fit.
+    weight: float = 35
+    hide_non_sponsors: bool = False
 
 
 @dataclass
@@ -50,6 +66,7 @@ class Profile:
     must_keep: list[str] = field(default_factory=list)
     search: SearchConfig = field(default_factory=SearchConfig)
     scoring: ScoringConfig = field(default_factory=ScoringConfig)
+    sponsorship: SponsorshipConfig = field(default_factory=SponsorshipConfig)
 
 
 def load_profile(path: Path = DEFAULT_PROFILE_PATH) -> Profile:
@@ -74,6 +91,7 @@ def load_profile(path: Path = DEFAULT_PROFILE_PATH) -> Profile:
             preferred_titles=scoring.get("preferred_titles", []),
             locations=scoring.get("locations", {}),
         ),
+        sponsorship=SponsorshipConfig(**data.get("sponsorship", {})),
     )
 
 

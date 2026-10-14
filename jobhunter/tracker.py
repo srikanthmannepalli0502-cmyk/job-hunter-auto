@@ -2,7 +2,7 @@
 
 from datetime import datetime, timezone
 
-from sqlalchemy import DateTime, Float, ForeignKey, Integer, String, Text, create_engine, select
+from sqlalchemy import DateTime, Float, ForeignKey, Integer, String, Text, create_engine, inspect, select, text
 from sqlalchemy.orm import DeclarativeBase, Mapped, Session, mapped_column, sessionmaker
 
 from jobhunter.models import JobListing
@@ -32,6 +32,9 @@ class Job(Base):
     salary_min: Mapped[float | None] = mapped_column(Float)
     salary_max: Mapped[float | None] = mapped_column(Float)
     match_score: Mapped[float] = mapped_column(Float, default=0.0)
+    sponsor_score: Mapped[float] = mapped_column(Float, default=0.0)
+    sponsor_note: Mapped[str | None] = mapped_column(String(500))
+    overall_score: Mapped[float] = mapped_column(Float, default=0.0)
     date_posted: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     date_fetched: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_now)
 
@@ -52,7 +55,19 @@ class Tracker:
     def __init__(self, database_url: str):
         self.engine = create_engine(database_url)
         Base.metadata.create_all(self.engine)
+        self._add_missing_columns()
         self.Session = sessionmaker(self.engine, expire_on_commit=False)
+
+    def _add_missing_columns(self) -> None:
+        """create_all() doesn't alter existing tables; add columns introduced after a database was created."""
+        existing = {c["name"] for c in inspect(self.engine).get_columns("jobs")}
+        added = {"sponsor_score": "FLOAT DEFAULT 0", "sponsor_note": "VARCHAR(500)", "overall_score": "FLOAT DEFAULT 0"}
+        with self.engine.begin() as conn:
+            for name, ddl in added.items():
+                if name not in existing:
+                    conn.execute(text(f"ALTER TABLE jobs ADD COLUMN {name} {ddl}"))
+            if "overall_score" not in existing:  # older rows: rank by the fit score they have
+                conn.execute(text("UPDATE jobs SET overall_score = match_score"))
 
     def save_new(self, jobs: list[JobListing]) -> list[Job]:
         """Store jobs not seen before; return only the newly stored ones."""
@@ -68,6 +83,8 @@ class Tracker:
                     dedupe_key=j.dedupe_key, title=j.title, company=j.company, location=j.location,
                     job_url=j.job_url, source=j.source, description=j.description,
                     salary_min=j.salary_min, salary_max=j.salary_max, match_score=j.match_score,
+                    sponsor_score=j.sponsor_score, sponsor_note=j.sponsor_note or None,
+                    overall_score=j.overall_score or j.match_score,
                     date_posted=j.date_posted, date_fetched=j.date_fetched,
                 )
                 s.add(row)
@@ -79,11 +96,13 @@ class Tracker:
         with self.Session() as s:
             return s.get(Job, job_id)
 
-    def top_jobs(self, limit: int = 10, unapplied_only: bool = True) -> list[Job]:
+    def top_jobs(self, limit: int = 10, unapplied_only: bool = True, sponsors_only: bool = False) -> list[Job]:
         with self.Session() as s:
-            q = select(Job).order_by(Job.match_score.desc(), Job.date_fetched.desc()).limit(limit)
+            q = select(Job).order_by(Job.overall_score.desc(), Job.date_fetched.desc()).limit(limit)
             if unapplied_only:
                 q = q.where(~Job.id.in_(select(Application.job_id)))
+            if sponsors_only:
+                q = q.where(Job.sponsor_score > 0)
             return list(s.scalars(q))
 
     def log_application(self, job_id: int, resume_path: str = "", notes: str = "") -> Application:
