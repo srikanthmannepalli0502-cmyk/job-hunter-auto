@@ -64,3 +64,10 @@ data_file = "data/h1b_sponsors.csv"
 roles = ["analyst", "data_science", "ai"]
 weight = 35                  # share (0-100) of the overall score that comes from sponsorship
 hide_non_sponsors = false    # true = drop jobs at companies with no H-1B filings
+
+[boards]
+# Target companies' own Greenhouse / Lever / Ashby boards; build the list with
+# `python -m jobhunter discover-boards`. Postings must match a preferred title, be full
+# time, in the US (or remote) and newer than max_days_old.
+file = "data/company_boards.csv"
+enabled = true

@@ -57,6 +57,13 @@ class SponsorshipConfig:
 
 
 @dataclass
+class BoardsConfig:
+    # Target companies' Greenhouse / Lever / Ashby boards (built by `discover-boards`).
+    file: str = "data/company_boards.csv"
+    enabled: bool = True
+
+
+@dataclass
 class Profile:
     name: str = ""
     linkedin_url: str = ""
@@ -67,6 +74,7 @@ class Profile:
     search: SearchConfig = field(default_factory=SearchConfig)
     scoring: ScoringConfig = field(default_factory=ScoringConfig)
     sponsorship: SponsorshipConfig = field(default_factory=SponsorshipConfig)
+    boards: BoardsConfig = field(default_factory=BoardsConfig)
 
 
 def load_profile(path: Path = DEFAULT_PROFILE_PATH) -> Profile:
@@ -92,6 +100,7 @@ def load_profile(path: Path = DEFAULT_PROFILE_PATH) -> Profile:
             locations=scoring.get("locations", {}),
         ),
         sponsorship=SponsorshipConfig(**data.get("sponsorship", {})),
+        boards=BoardsConfig(**data.get("boards", {})),
     )
 
 

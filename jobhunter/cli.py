@@ -7,6 +7,7 @@
     python -m jobhunter status APP_ID STATUS   update an application (interview, offer, ...)
     python -m jobhunter applications           show your application history
     python -m jobhunter sponsor "COMPANY"      look up a company's H-1B sponsorship
+    python -m jobhunter discover-boards        find target sponsors' Greenhouse/Lever/Ashby boards
 """
 
 import argparse
@@ -20,7 +21,9 @@ from jobhunter.config import DEFAULT_PROFILE_PATH, load_profile, settings
 from jobhunter.scoring import rank_jobs
 from jobhunter.sponsors import SponsorDB, apply_sponsorship, describe, sponsor_score
 from jobhunter.sources import AdzunaSource, RemotiveSource, dedupe
+from jobhunter.sources.base import USER_AGENT
 from jobhunter.sources.base import is_excluded
+from jobhunter.sources.boards import CompanyBoardsSource, find_board, load_boards, write_boards
 from jobhunter.tracker import STATUSES, Tracker
 
 
@@ -45,7 +48,11 @@ def print_jobs(jobs) -> None:
 
 def cmd_search(args, profile, tracker) -> None:
     jobs = []
-    for source in (AdzunaSource(), RemotiveSource()):
+    sources = [AdzunaSource(), RemotiveSource()]
+    boards = load_boards(profile.boards.file) if profile.boards.enabled else []
+    if boards:
+        sources.append(CompanyBoardsSource(boards, profile.scoring.preferred_titles))
+    for source in sources:
         try:
             jobs.extend(source.fetch(profile.search))
         except Exception as e:  # one failing source shouldn't stop the run
@@ -139,6 +146,31 @@ def cmd_sponsor(args, profile, tracker) -> None:
         print(f"  median offered wage, data roles: ${s.median_wage_data:,.0f}")
 
 
+def cmd_discover_boards(args, profile, tracker) -> None:
+    import httpx
+
+    db = SponsorDB.load(profile.sponsorship.data_file)
+    if db is None:
+        sys.exit("No sponsor data; see README (H-1B sponsorship).")
+    roles = profile.sponsorship.roles
+    targets = sorted(db.by_key.values(), key=lambda s: s.filings_in(roles), reverse=True)
+    targets = [s for s in targets if s.filings_in(roles) >= args.min_filings][: args.top]
+    print(f"Checking {len(targets)} sponsors with {args.min_filings}+ H-1B filings in your roles...")
+
+    rows = []
+    with httpx.Client(timeout=15, headers={"User-Agent": USER_AGENT}) as client:
+        for i, s in enumerate(targets, 1):
+            found = find_board(client, s.key)
+            if found:
+                ats, slug, name = found
+                rows.append({"employer_key": s.key, "employer": s.employer, "ats": ats, "slug": slug,
+                             "board_name": name})
+                print(f"  [{i}/{len(targets)}] {s.employer}: {ats}/{slug}")
+    write_boards(profile.boards.file, rows)
+    print(f"\nFound {len(rows)} boards; wrote {profile.boards.file}. Review it: remove any row that "
+          f"points at a different company with a similar name.")
+
+
 def build_parser() -> argparse.ArgumentParser:
     p = argparse.ArgumentParser(prog="jobhunter", description="Find, score and tailor for jobs.")
     p.add_argument("--profile", type=Path, default=DEFAULT_PROFILE_PATH, help="path to profile.toml")
@@ -171,6 +203,11 @@ def build_parser() -> argparse.ArgumentParser:
 
     s = sub.add_parser("applications", help="show your application history")
     s.set_defaults(func=cmd_applications)
+
+    s = sub.add_parser("discover-boards", help="find target sponsors' Greenhouse/Lever/Ashby boards")
+    s.add_argument("--top", type=int, default=300, help="how many top sponsors to check")
+    s.add_argument("--min-filings", type=int, default=10, help="minimum H-1B filings in your roles")
+    s.set_defaults(func=cmd_discover_boards)
 
     s = sub.add_parser("sponsor", help="look up a company's H-1B sponsorship")
     s.add_argument("company")
