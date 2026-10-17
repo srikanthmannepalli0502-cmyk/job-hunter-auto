@@ -232,21 +232,50 @@ def describe(match: SponsorMatch | None, roles: list[str]) -> str:
     return note if match.exact else f"{note} (matched {s.employer})"
 
 
+# Phrases in a posting that rule out (or very likely rule out) visa sponsorship for that role,
+# even at a company that sponsors others.
+_NO_SPONSORSHIP = re.compile(
+    r"(?:not|unable to|cannot|can't|won't|will not|do not|does not|don't|is not able to)\s+"
+    r"(?:\w+\s+){0,3}sponsor"
+    r"|without\s+(?:the\s+need\s+for\s+)?(?:current\s+or\s+future\s+|future\s+)?(?:visa\s+|employer\s+)?sponsorship"
+    r"|sponsorship\s+(?:is\s+)?(?:not\s+available|unavailable|not\s+offered|not\s+provided)"
+    r"|no\s+(?:visa\s+)?sponsorship"
+    r"|u\.?s\.?\s+citizens?\s+only|must\s+be\s+(?:a\s+)?u\.?s\.?\s+citizen|u\.?s\.?\s+citizenship\s+(?:is\s+)?required"
+    r"|(?:active|current|ability to obtain)\s+(?:\w+\s+){0,2}(?:security\s+)?clearance",
+    re.I,
+)
+# Down-weight instead of hiding: the phrase can be boilerplate or about a different visa type.
+WARNING_PENALTY = 0.4
+
+
+def sponsorship_warning(description: str) -> str:
+    """The first phrase suggesting this posting won't sponsor a visa, or ''."""
+    m = _NO_SPONSORSHIP.search(description or "")
+    if not m:
+        return ""
+    start, end = max(0, m.start() - 40), min(len(description), m.end() + 40)
+    return "..." + re.sub(r"\s+", " ", description[start:end]).strip() + "..."
+
+
 def apply_sponsorship(jobs: list[JobListing], db: SponsorDB | None, cfg: SponsorshipConfig) -> list[JobListing]:
-    """Set sponsor_score, sponsor_note and overall_score on each job; return them best first.
+    """Set sponsor_score, sponsor_note, sponsorship_warning and overall_score; return jobs best first.
 
     overall = fit score x (1 - weight) + sponsor score x weight. Without sponsor data the
-    overall score is the fit score.
+    overall score is the fit score. A posting that says it won't sponsor keeps only
+    WARNING_PENALTY of its overall score.
     """
     weight = max(0.0, min(1.0, cfg.weight / 100))
     for job in jobs:
+        job.sponsorship_warning = sponsorship_warning(job.description)
         if db is None:
             job.overall_score = job.match_score
-            continue
-        match = db.match(job.company)
-        job.sponsor_score = sponsor_score(match.sponsor, cfg.roles) if match else 0.0
-        job.sponsor_note = describe(match, cfg.roles)
-        job.overall_score = round(job.match_score * (1 - weight) + job.sponsor_score * weight, 1)
+        else:
+            match = db.match(job.company)
+            job.sponsor_score = sponsor_score(match.sponsor, cfg.roles) if match else 0.0
+            job.sponsor_note = describe(match, cfg.roles)
+            job.overall_score = round(job.match_score * (1 - weight) + job.sponsor_score * weight, 1)
+        if job.sponsorship_warning:
+            job.overall_score = round(job.overall_score * WARNING_PENALTY, 1)
     if db is not None and cfg.hide_non_sponsors:
         jobs = [j for j in jobs if j.sponsor_score > 0]
     return sorted(jobs, key=lambda j: j.overall_score, reverse=True)

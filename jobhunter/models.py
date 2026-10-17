@@ -20,6 +20,7 @@ class JobListing:
     match_score: float = 0.0  # fit with your skills, titles and locations (0-100)
     sponsor_score: float = 0.0  # H-1B sponsorship signal (0-100), see sponsors.py
     sponsor_note: str = ""
+    sponsorship_warning: str = ""  # e.g. the posting says it won't sponsor (sponsors.sponsorship_warning)
     overall_score: float = 0.0  # fit and sponsorship combined; used for ranking
 
     @property

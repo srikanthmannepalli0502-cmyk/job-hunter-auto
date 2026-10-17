@@ -30,6 +30,8 @@ from jobhunter.sponsors import normalize_name
 GREENHOUSE = "https://boards-api.greenhouse.io/v1/boards/{slug}"
 LEVER = "https://api.lever.co/v0/postings/{slug}"
 ASHBY = "https://api.ashbyhq.com/posting-api/job-board/{slug}"
+SMARTRECRUITERS = "https://api.smartrecruiters.com/v1/companies/{slug}/postings"
+AMAZON = "https://www.amazon.jobs/en/search.json"
 BOARD_COLUMNS = ["employer_key", "employer", "ats", "slug", "board_name"]
 
 # ----------------------------------------------------------------------------- filters
@@ -85,7 +87,7 @@ def title_matches(title: str, wanted: list[str]) -> bool:
 class Board:
     employer_key: str
     employer: str
-    ats: str   # greenhouse, lever, ashby or workday
+    ats: str   # greenhouse, lever, ashby, workday, smartrecruiters, amazon or oracle
     slug: str  # board name; for Workday the career site URL, e.g. https://acme.wd5.myworkdayjobs.com/External
 
 
@@ -236,6 +238,107 @@ class CompanyBoardsSource(JobSource):
         ), ("US" if country == "United States of America" else "XX") if country else ""
 
 
+    def _fetch_smartrecruiters(self, b: Board, search: SearchConfig, since: datetime):
+        """SmartRecruiters' public Posting API: search by keyword, then read matching postings."""
+        seen: set[str] = set()
+        for query in search.all_queries:
+            data = self._get(SMARTRECRUITERS.format(slug=b.slug), q=query, limit=100, country="us")
+            for p in data.get("content") or []:
+                if p.get("id") in seen:
+                    continue
+                seen.add(p.get("id"))
+                posted = p.get("releasedDate")
+                posted_at = datetime.fromisoformat(posted.replace("Z", "+00:00")) if posted else None
+                title = (p.get("name") or "").strip()
+                if (posted_at and posted_at < since) or not title_matches(title, self.titles) \
+                        or any(w.lower() in title.lower() for w in search.exclude_keywords):
+                    continue
+                detail = self._get(p["ref"])
+                sections = (detail.get("jobAd") or {}).get("sections") or {}
+                text = _join(strip_html((sections.get(k) or {}).get("text") or "")
+                                   for k in ("jobDescription", "qualifications", "additionalInformation"))
+                loc = p.get("location") or {}
+                yield JobListing(
+                    title=title, company=b.employer,
+                    location=loc.get("fullLocation") or ", ".join(x for x in (loc.get("city"), loc.get("region")) if x),
+                    job_url=detail.get("postingUrl") or "", source="smartrecruiters", description=text,
+                    date_posted=posted_at,
+                    job_type=classify_job_type(title, (p.get("typeOfEmployment") or {}).get("label", "")),
+                ), (loc.get("country") or "").upper()
+                time.sleep(self.delay)
+
+    def _fetch_amazon(self, b: Board, search: SearchConfig, since: datetime):
+        """amazon.jobs search feed (the JSON behind its search page), newest first, US only."""
+        seen: set[str] = set()
+        for query in search.all_queries:
+            data = self._get(AMAZON, base_query=query, country="USA", result_limit=100, offset=0, sort="recent")
+            for j in data.get("jobs") or []:
+                if j.get("id") in seen:
+                    continue
+                seen.add(j.get("id"))
+                try:
+                    posted = datetime.strptime(j.get("posted_date", ""), "%B %d, %Y").replace(tzinfo=timezone.utc)
+                except ValueError:
+                    posted = None
+                title = (j.get("title") or "").strip()
+                text = _join(strip_html(j.get(k) or "") for k in
+                                   ("description", "basic_qualifications", "preferred_qualifications"))
+                yield JobListing(
+                    title=title, company=b.employer, location=j.get("normalized_location") or j.get("location", ""),
+                    job_url="https://www.amazon.jobs" + (j.get("job_path") or ""), source="amazon",
+                    description=text, date_posted=posted,
+                    job_type="intern" if j.get("is_intern") else classify_job_type(title, j.get("job_schedule_type") or ""),
+                ), "US" if j.get("country_code") == "USA" else (j.get("country_code") or "")
+
+    def _fetch_oracle(self, b: Board, search: SearchConfig, since: datetime):
+        """Oracle Recruiting Cloud career sites (the REST feed behind their search page), newest first."""
+        site = OracleSite.parse(b.slug)
+        seen: set[str] = set()
+        for query in search.all_queries:
+            for page in range(self.workday_max_pages):
+                finder = (f"findReqs;siteNumber={site.site},keyword={query},limit=25,offset={page * 25},"
+                          "sortBy=POSTING_DATES_DESC")
+                data = self._get(site.api, onlyData="true", expand="requisitionList.secondaryLocations", finder=finder)
+                items = (data.get("items") or [{}])[0].get("requisitionList") or []
+                older = False
+                for r in items:
+                    posted = datetime.fromisoformat(r["PostedDate"]).replace(tzinfo=timezone.utc) if r.get("PostedDate") else None
+                    if posted and posted < since:
+                        older = True
+                        continue
+                    if r.get("Id") in seen:
+                        continue
+                    seen.add(r.get("Id"))
+                    title = (r.get("Title") or "").strip()
+                    text = _join(strip_html(r.get(k) or "") for k in
+                                       ("ShortDescriptionStr", "ExternalResponsibilitiesStr", "ExternalQualificationsStr"))
+                    yield JobListing(
+                        title=title, company=b.employer, location=r.get("PrimaryLocation") or "",
+                        job_url=f"{site.url}/job/{r.get('Id')}", source="oracle", description=text,
+                        date_posted=posted,
+                        job_type=classify_job_type(title, r.get("JobSchedule") or "", r.get("WorkerType") or ""),
+                    ), r.get("PrimaryLocationCountry") or ""
+                if older or len(items) < 25:
+                    break  # sorted newest first: the rest are older than the window
+                time.sleep(self.delay)
+
+
+@dataclass(frozen=True)
+class OracleSite:
+    url: str  # https://jpmc.fa.oraclecloud.com/hcmUI/CandidateExperience/en/sites/CX_1001
+    api: str  # https://jpmc.fa.oraclecloud.com/hcmRestApi/resources/latest/recruitingCEJobRequisitions
+    site: str  # CX_1001
+
+    @classmethod
+    def parse(cls, url: str) -> "OracleSite":
+        m = re.match(r"(https://[^/]+)/hcmUI/CandidateExperience/[a-z]{2}(?:-[A-Z]{2})?/sites/([^/?#]+)", url.strip())
+        if not m:
+            raise ValueError(f"not an Oracle Recruiting Cloud site URL: {url}")
+        host, site = m.groups()
+        return cls(url=f"{host}/hcmUI/CandidateExperience/en/sites/{site}",
+                   api=f"{host}/hcmRestApi/resources/latest/recruitingCEJobRequisitions", site=site)
+
+
 @dataclass(frozen=True)
 class WorkdaySite:
     url: str  # https://acme.wd5.myworkdayjobs.com/External
@@ -259,6 +362,11 @@ def workday_age_days(posted_on: str) -> int | None:
         return 1
     m = re.search(r"(\d+)\+?\s*day", text)
     return int(m.group(1)) if m else None
+
+
+def _join(parts) -> str:
+    """Non-empty description sections, separated by blank lines."""
+    return "\n\n".join(x for x in parts if x and x.strip())
 
 
 def _days_ago(days: int | None) -> datetime | None:
