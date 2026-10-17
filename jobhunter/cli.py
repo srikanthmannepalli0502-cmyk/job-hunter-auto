@@ -1,11 +1,15 @@
 """Command-line interface.
 
-    python -m jobhunter search                 fetch, score and store new jobs
-    python -m jobhunter list                   show top unapplied jobs
-    python -m jobhunter tailor JOB_ID          tailor your resume to one job
+    python -m jobhunter run                    gather, rank and store jobs (what the schedule runs)
+    python -m jobhunter review                 open the review page in your browser
+    python -m jobhunter list                   show top open jobs you haven't decided on or applied to
+    python -m jobhunter shortlist JOB_ID       mark a job to apply to (skip JOB_ID hides it)
+    python -m jobhunter kit JOB_ID             tailored resume + cover note for one job
     python -m jobhunter open JOB_ID            open the posting, then log that you applied
+    python -m jobhunter applied JOB_ID         log an application (records the kit you sent)
     python -m jobhunter status APP_ID STATUS   update an application (interview, offer, ...)
     python -m jobhunter applications           show your application history
+    python -m jobhunter runs                   show recent runs and any source problems
     python -m jobhunter sponsor "COMPANY"      look up a company's H-1B sponsorship
     python -m jobhunter discover-boards        find target sponsors' Greenhouse/Lever/Ashby boards
 """
@@ -13,17 +17,16 @@
 import argparse
 import sys
 import webbrowser
+from datetime import datetime
 from pathlib import Path
 
 from loguru import logger
 
 from jobhunter.config import DEFAULT_PROFILE_PATH, load_profile, settings
-from jobhunter.scoring import rank_jobs
-from jobhunter.sponsors import SponsorDB, apply_sponsorship, describe, sponsor_score
-from jobhunter.sources import AdzunaSource, RemotiveSource, dedupe
+from jobhunter.pipeline import prepare_kit, run_search
 from jobhunter.sources.base import USER_AGENT
-from jobhunter.sources.base import is_excluded
-from jobhunter.sources.boards import CompanyBoardsSource, find_board, load_boards, write_boards
+from jobhunter.sources.boards import find_board, write_boards
+from jobhunter.sponsors import SponsorDB, describe, sponsor_score
 from jobhunter.tracker import STATUSES, Tracker
 
 
@@ -38,42 +41,59 @@ def print_jobs(jobs) -> None:
         print("No jobs to show.")
         return
     for job in jobs:
-        print(f"[{job.id:>4}] {job.overall_score:5.1f}  {job.title} @ {job.company}")
+        mark = "*" if job.decision == "shortlisted" else " "
+        print(f"[{job.id:>4}]{mark}{job.overall_score:5.1f}  {job.title} @ {job.company}")
         kind = (job.job_type or "").replace("_", "-") if job.job_type not in (None, "full_time") else ""
         details = " | ".join(x for x in (kind.upper(), job.location, job.source, _salary(job)) if x)
         print(f"        {details}")
         if job.sponsor_note:
             badge = "H-1B ok " if job.sponsor_score > 0 else "NO H-1B "
             print(f"        {badge}{job.sponsor_score:5.1f}: {job.sponsor_note}  (fit {job.match_score:.0f})")
+        if job.sponsorship_warning:
+            print(f"        WARNING posting may not sponsor: {job.sponsorship_warning}")
 
 
-def cmd_search(args, profile, tracker) -> None:
-    jobs = []
-    sources = [AdzunaSource(), RemotiveSource()]
-    boards = load_boards(profile.boards.file) if profile.boards.enabled else []
-    if boards:
-        sources.append(CompanyBoardsSource(boards, profile.scoring.preferred_titles))
-    for source in sources:
-        try:
-            jobs.extend(source.fetch(profile.search))
-        except Exception as e:  # one failing source shouldn't stop the run
-            logger.error(f"{source.name} failed: {e}")
-
-    jobs = [j for j in dedupe(jobs) if not is_excluded(j, profile.search.exclude_keywords)
-            and j.job_type in profile.search.job_types]
-    ranked = rank_jobs(jobs, profile.scoring)
-    relevant = [j for j in ranked if j.match_score >= profile.search.min_score]
-    relevant = apply_sponsorship(relevant, SponsorDB.load(profile.sponsorship.data_file), profile.sponsorship)
-    new = tracker.save_new(relevant)
-    print(f"\nFetched {len(jobs)} jobs, {len(relevant)} scored >= {profile.search.min_score}, {len(new)} new.\n")
-    print_jobs(sorted(new, key=lambda j: j.overall_score, reverse=True)[: args.top])
+def cmd_run(args, profile, tracker) -> None:
+    if args.log:
+        log_dir = Path("logs")
+        log_dir.mkdir(exist_ok=True)
+        logger.add(log_dir / f"run_{datetime.now():%Y-%m-%d}.log", level="INFO", encoding="utf-8")
+    summary = run_search(profile, tracker)
+    print(f"\n{summary.line()}\n")
+    print_jobs(sorted(summary.new, key=lambda j: j.overall_score, reverse=True)[: args.top])
+    for p in summary.problems:
+        print(f"  problem: {p}")
 
 
 def cmd_list(args, profile, tracker) -> None:
-    print_jobs(tracker.top_jobs(limit=args.top, sponsors_only=args.sponsors_only))
+    decisions = ("shortlisted",) if args.shortlisted else ("new", "shortlisted")
+    print_jobs(tracker.top_jobs(limit=args.top, sponsors_only=args.sponsors_only, decisions=decisions))
+
+
+def _decide(decision):
+    def cmd(args, profile, tracker) -> None:
+        for job_id in args.job_ids:
+            job = tracker.set_decision(job_id, decision)
+            print(f"[{job.id}] {job.title} @ {job.company}: {decision}")
+    return cmd
+
+
+def cmd_kit(args, profile, tracker) -> None:
+    jd = Path(args.jd_file).read_text(encoding="utf-8") if args.jd_file else ""
+    job = tracker.get_job(args.job_id)
+    if job is None:
+        sys.exit(f"No job with id {args.job_id}")
+    print(f"Preparing a kit for: {job.title} @ {job.company} (about a minute)...")
+    resume, cover, warnings = prepare_kit(profile, tracker, args.job_id, jd)
+    print(f"  resume:     {Path(resume).resolve() if resume else 'FAILED (see log)'}")
+    print(f"  cover note: {Path(cover).resolve() if cover else 'FAILED (see log)'}")
+    for w in warnings:
+        print(f"  CHECK: {w}")
+    print("Review both before sending - the LLM can make mistakes.")
 
 
 def cmd_tailor(args, profile, tracker) -> None:
+    """Resume only (kept for compatibility; `kit` also writes a cover note)."""
     from jobhunter.llm import LLMClient
     from jobhunter.resume.parser import parse_resume
     from jobhunter.resume.tailor import ResumeTailor
@@ -81,27 +101,16 @@ def cmd_tailor(args, profile, tracker) -> None:
     job = tracker.get_job(args.job_id)
     if job is None:
         sys.exit(f"No job with id {args.job_id}")
-
-    if args.jd_file:
-        description = Path(args.jd_file).read_text(encoding="utf-8")
-    else:
-        description = job.description or ""
-        if len(description) < 800:
-            print("Note: this source only provides a short description. For a better result,")
-            print("paste the full posting into a text file and pass --jd-file FILE.\n")
-
+    description = Path(args.jd_file).read_text(encoding="utf-8") if args.jd_file else job.description or ""
     base_text = parse_resume(profile.base_resume)
     if not base_text:
         sys.exit(f"Could not read your base resume at {profile.base_resume}")
-
-    tailor = ResumeTailor(base_text, LLMClient(), profile.must_keep,
-                          profile.linkedin_url, profile.output_dir)
-    path = tailor.tailor(f"{job.title} - {job.company}\n{job.location}\n\n{description}",
-                         job.company, job.title)
+    tailor = ResumeTailor(base_text, LLMClient(), profile.must_keep, profile.linkedin_url, profile.output_dir)
+    path = tailor.tailor(f"{job.title} - {job.company}\n{job.location}\n\n{description}", job.company, job.title)
     if not path:
         sys.exit("Could not produce a one-page resume. Try again or shorten your base resume.")
-    print(f"\nTailored resume: {Path(path).resolve()}")
-    print("Review it before sending - the LLM can make mistakes.")
+    tracker.set_kit(job.id, resume_path=path)
+    print(f"\nTailored resume: {Path(path).resolve()}\nReview it before sending - the LLM can make mistakes.")
 
 
 def cmd_open(args, profile, tracker) -> None:
@@ -110,11 +119,18 @@ def cmd_open(args, profile, tracker) -> None:
         sys.exit(f"No job with id {args.job_id}")
     print(f"Opening: {job.title} @ {job.company}\n{job.job_url}")
     webbrowser.open(job.job_url)
-
+    if job.kit_resume_path:
+        print(f"Your kit: {job.kit_resume_path}" + (f"\n          {job.kit_cover_path}" if job.kit_cover_path else ""))
     answer = input("\nDid you submit an application? [y/N] ").strip().lower()
     if answer == "y":
         app = tracker.log_application(job.id, resume_path=args.resume or "")
-        print(f"Logged application #{app.id}.")
+        print(f"Logged application #{app.id} (resume: {app.resume_path or 'not recorded'}).")
+
+
+def cmd_applied(args, profile, tracker) -> None:
+    app = tracker.log_application(args.job_id, resume_path=args.resume or "", notes=args.notes or "")
+    print(f"Logged application #{app.id} (resume: {app.resume_path or 'not recorded'}, "
+          f"cover note: {app.cover_note_path or 'none'}).")
 
 
 def cmd_status(args, profile, tracker) -> None:
@@ -128,6 +144,23 @@ def cmd_applications(args, profile, tracker) -> None:
         print("No applications logged yet.")
     for app, job in rows:
         print(f"#{app.id:<4} {app.status:<10} {app.applied_date:%Y-%m-%d}  {job.title} @ {job.company}")
+        if app.resume_path:
+            print(f"      resume: {app.resume_path}")
+
+
+def cmd_runs(args, profile, tracker) -> None:
+    for r in tracker.recent_runs(args.top):
+        took = f"{(r.finished - r.started).seconds // 60} min" if r.finished else "unfinished"
+        print(f"#{r.id:<4} {r.started:%Y-%m-%d %H:%M} UTC  {took:>10}  fetched {r.fetched}, new {r.new}, "
+              f"seen again {r.seen_again}, closed {r.closed}")
+        for line in (r.problems or "").splitlines():
+            print(f"        problem: {line}")
+
+
+def cmd_review(args, profile, tracker) -> None:
+    from jobhunter.web import serve
+
+    serve(profile, tracker, port=args.port, open_browser=not args.no_browser)
 
 
 def cmd_sponsor(args, profile, tracker) -> None:
@@ -174,28 +207,52 @@ def cmd_discover_boards(args, profile, tracker) -> None:
 
 
 def build_parser() -> argparse.ArgumentParser:
-    p = argparse.ArgumentParser(prog="jobhunter", description="Find, score and tailor for jobs.")
+    p = argparse.ArgumentParser(prog="jobhunter", description="Find, rank and apply to jobs.")
     p.add_argument("--profile", type=Path, default=DEFAULT_PROFILE_PATH, help="path to profile.toml")
     sub = p.add_subparsers(dest="command", required=True)
 
-    s = sub.add_parser("search", help="fetch, score and store new jobs")
-    s.add_argument("--top", type=int, default=15)
-    s.set_defaults(func=cmd_search)
+    for name in ("run", "search"):
+        s = sub.add_parser(name, help="gather, rank and store jobs from every source")
+        s.add_argument("--top", type=int, default=15)
+        s.add_argument("--log", action="store_true", help="also write logs/run_<date>.log")
+        s.set_defaults(func=cmd_run)
 
-    s = sub.add_parser("list", help="show top unapplied jobs")
+    s = sub.add_parser("review", help="open the review page in your browser")
+    s.add_argument("--port", type=int, default=8765)
+    s.add_argument("--no-browser", action="store_true")
+    s.set_defaults(func=cmd_review)
+
+    s = sub.add_parser("list", help="show top open jobs")
     s.add_argument("--top", type=int, default=15)
     s.add_argument("--sponsors-only", action="store_true", help="hide companies with no H-1B filings")
+    s.add_argument("--shortlisted", action="store_true", help="only jobs you shortlisted")
     s.set_defaults(func=cmd_list)
 
-    s = sub.add_parser("tailor", help="tailor your resume to a job")
+    for name, decision in (("shortlist", "shortlisted"), ("skip", "skipped"), ("unskip", "new")):
+        s = sub.add_parser(name, help=f"mark jobs as {decision}")
+        s.add_argument("job_ids", type=int, nargs="+")
+        s.set_defaults(func=_decide(decision))
+
+    s = sub.add_parser("kit", help="tailored resume + cover note for a job")
+    s.add_argument("job_id", type=int)
+    s.add_argument("--jd-file", help="text file with the full job description")
+    s.set_defaults(func=cmd_kit)
+
+    s = sub.add_parser("tailor", help="tailored resume only")
     s.add_argument("job_id", type=int)
     s.add_argument("--jd-file", help="text file with the full job description")
     s.set_defaults(func=cmd_tailor)
 
     s = sub.add_parser("open", help="open a posting in your browser and log the application")
     s.add_argument("job_id", type=int)
-    s.add_argument("--resume", help="path of the resume you sent")
+    s.add_argument("--resume", help="path of the resume you sent (default: the job's kit)")
     s.set_defaults(func=cmd_open)
+
+    s = sub.add_parser("applied", help="log that you applied to a job")
+    s.add_argument("job_id", type=int)
+    s.add_argument("--resume", help="path of the resume you sent (default: the job's kit)")
+    s.add_argument("--notes")
+    s.set_defaults(func=cmd_applied)
 
     s = sub.add_parser("status", help="update an application's status")
     s.add_argument("app_id", type=int)
@@ -205,6 +262,10 @@ def build_parser() -> argparse.ArgumentParser:
 
     s = sub.add_parser("applications", help="show your application history")
     s.set_defaults(func=cmd_applications)
+
+    s = sub.add_parser("runs", help="show recent runs and source problems")
+    s.add_argument("--top", type=int, default=10)
+    s.set_defaults(func=cmd_runs)
 
     s = sub.add_parser("discover-boards", help="find target sponsors' Greenhouse/Lever/Ashby boards")
     s.add_argument("--top", type=int, default=300, help="how many top sponsors to check")

@@ -166,7 +166,7 @@ def _build_pdf(resume_text: str, linkedin_url: str = "") -> ResumePDF:
             pdf.cell(3, LINE_HEIGHT, "-")
             pdf.set_x(text_x)
             text_width = content_width - 7
-            pdf.multi_cell(text_width, LINE_HEIGHT, txt)
+            pdf.multi_cell(text_width, LINE_HEIGHT, txt, new_x="LMARGIN", new_y="NEXT")
             continue
 
         # DATE LINES
@@ -190,9 +190,11 @@ def _build_pdf(resume_text: str, linkedin_url: str = "") -> ResumePDF:
             pdf.cell(content_width, LINE_HEIGHT, line, new_x="LMARGIN", new_y="NEXT")
             continue
 
-        # REGULAR TEXT
+        # REGULAR TEXT (start at the left margin: multi_cell otherwise leaves x at the right edge,
+        # squeezing the next plain line, e.g. Coursework after the degree line, into a sliver)
         pdf.set_font("Helvetica", "", BODY_FONT_SIZE)
-        pdf.multi_cell(content_width, LINE_HEIGHT, line)
+        pdf.set_x(MARGIN_LEFT)
+        pdf.multi_cell(content_width, LINE_HEIGHT, line, new_x="LMARGIN", new_y="NEXT")
 
     return pdf
 

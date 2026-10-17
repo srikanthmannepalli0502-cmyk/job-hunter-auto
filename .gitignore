@@ -25,6 +25,8 @@ Thumbs.db
 # Resumes (contain personal info)
 resumes/*.docx
 resumes/*.pdf
+resumes/*.txt
+resumes/*.md
 resumes/tailored/
 !resumes/.gitkeep
 

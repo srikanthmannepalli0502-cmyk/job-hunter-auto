@@ -116,12 +116,14 @@ class CompanyBoardsSource(JobSource):
         since = datetime.now(timezone.utc) - timedelta(days=search.max_days_old)
         jobs: list[JobListing] = []
         failed = 0
+        self.failures: list[str] = []
         for board in self.boards:
             try:
                 # list(): the parsers are generators, so request errors surface while iterating.
                 postings = list(getattr(self, f"_fetch_{board.ats}")(board, search, since))
             except (httpx.HTTPError, ValueError, KeyError, TypeError) as e:
                 failed += 1
+                self.failures.append(f"{board.employer} ({board.ats}): {str(e)[:150]}")
                 self.logger.warning(f"{board.employer} ({board.ats}) failed: {e}")
                 continue
             for job, country in postings:

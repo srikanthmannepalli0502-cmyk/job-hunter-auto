@@ -16,6 +16,10 @@ DEFAULT_PROFILE_PATH = Path(os.getenv("JOBHUNTER_PROFILE", "profile.toml"))
 class Settings:
     groq_api_key: str = os.getenv("GROQ_API_KEY", "")
     groq_model: str = os.getenv("GROQ_MODEL", "llama-3.3-70b-versatile")
+    llm_provider: str = os.getenv("LLM_PROVIDER", "")  # azure or groq; default azure if its endpoint is set
+    azure_openai_endpoint: str = os.getenv("AZURE_OPENAI_ENDPOINT", "")
+    azure_openai_deployment: str = os.getenv("AZURE_OPENAI_DEPLOYMENT", "gpt-5-mini")
+    azure_openai_api_version: str = os.getenv("AZURE_OPENAI_API_VERSION", "2025-04-01-preview")
     adzuna_app_id: str = os.getenv("ADZUNA_APP_ID", "")
     adzuna_app_key: str = os.getenv("ADZUNA_APP_KEY", "")
     database_url: str = os.getenv("DATABASE_URL", "sqlite:///jobhunter.db")

@@ -4,9 +4,16 @@ from loguru import logger
 
 
 def parse_resume(file_path: str) -> str:
-    """Extract all text from a .docx or .pdf resume file."""
+    """Extract all text from a .docx, .pdf or plain-text (.txt / .md) resume file."""
     ext = os.path.splitext(file_path)[1].lower()
 
+    if ext in (".txt", ".md"):
+        try:
+            with open(file_path, encoding="utf-8") as f:
+                return f.read().strip()
+        except OSError as e:
+            logger.error(f"Failed to read {file_path}: {e}")
+            return ""
     if ext == ".docx":
         return _parse_docx(file_path)
     elif ext == ".pdf":
