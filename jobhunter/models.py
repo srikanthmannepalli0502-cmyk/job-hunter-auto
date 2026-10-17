@@ -16,6 +16,7 @@ class JobListing:
     salary_max: float | None = None
     date_posted: datetime | None = None
     date_fetched: datetime = field(default_factory=lambda: datetime.now(timezone.utc))
+    job_type: str = "full_time"  # full_time, part_time, intern, contract (see sources.base.classify_job_type)
     match_score: float = 0.0  # fit with your skills, titles and locations (0-100)
     sponsor_score: float = 0.0  # H-1B sponsorship signal (0-100), see sponsors.py
     sponsor_note: str = ""

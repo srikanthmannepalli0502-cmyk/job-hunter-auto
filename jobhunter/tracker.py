@@ -35,6 +35,7 @@ class Job(Base):
     sponsor_score: Mapped[float] = mapped_column(Float, default=0.0)
     sponsor_note: Mapped[str | None] = mapped_column(String(500))
     overall_score: Mapped[float] = mapped_column(Float, default=0.0)
+    job_type: Mapped[str | None] = mapped_column(String(20))
     date_posted: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     date_fetched: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_now)
 
@@ -61,7 +62,8 @@ class Tracker:
     def _add_missing_columns(self) -> None:
         """create_all() doesn't alter existing tables; add columns introduced after a database was created."""
         existing = {c["name"] for c in inspect(self.engine).get_columns("jobs")}
-        added = {"sponsor_score": "FLOAT DEFAULT 0", "sponsor_note": "VARCHAR(500)", "overall_score": "FLOAT DEFAULT 0"}
+        added = {"sponsor_score": "FLOAT DEFAULT 0", "sponsor_note": "VARCHAR(500)", "overall_score": "FLOAT DEFAULT 0",
+                 "job_type": "VARCHAR(20)"}
         with self.engine.begin() as conn:
             for name, ddl in added.items():
                 if name not in existing:
@@ -84,7 +86,7 @@ class Tracker:
                     job_url=j.job_url, source=j.source, description=j.description,
                     salary_min=j.salary_min, salary_max=j.salary_max, match_score=j.match_score,
                     sponsor_score=j.sponsor_score, sponsor_note=j.sponsor_note or None,
-                    overall_score=j.overall_score or j.match_score,
+                    overall_score=j.overall_score or j.match_score, job_type=j.job_type,
                     date_posted=j.date_posted, date_fetched=j.date_fetched,
                 )
                 s.add(row)

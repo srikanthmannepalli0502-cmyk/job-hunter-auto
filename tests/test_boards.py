@@ -7,13 +7,16 @@ from jobhunter.config import SearchConfig
 from jobhunter.sources.boards import (
     Board,
     CompanyBoardsSource,
+    WorkdaySite,
     find_board,
     is_us_location,
     load_boards,
     slug_candidates,
     title_matches,
+    workday_age_days,
     write_boards,
 )
+from jobhunter.sources.base import classify_job_type
 
 NOW = datetime.now(timezone.utc)
 RECENT = (NOW - timedelta(days=2)).isoformat()
@@ -79,9 +82,14 @@ def source():
                                delay=0, client=client)
 
 
-def test_keeps_only_recent_full_time_us_matching_jobs(source):
-    jobs = source.fetch(SearchConfig(max_days_old=14))
-    assert sorted(j.job_url for j in jobs) == ["https://ashby/1", "https://gh/1", "https://lever/1"]
+def test_keeps_only_recent_us_matching_jobs_of_wanted_types(source):
+    full_time = source.fetch(SearchConfig(max_days_old=14, job_types=["full_time"]))
+    assert sorted(j.job_url for j in full_time) == ["https://ashby/1", "https://gh/1", "https://lever/1"]
+
+    every_type = {j.job_url: j.job_type for j in source.fetch(SearchConfig(max_days_old=14))}
+    assert every_type == {"https://ashby/1": "full_time", "https://gh/1": "full_time",
+                          "https://lever/1": "full_time", "https://gh/3": "intern",
+                          "https://lever/3": "contract", "https://ashby/3": "part_time"}
 
 
 def test_parsed_fields(source):
@@ -93,7 +101,7 @@ def test_parsed_fields(source):
 
 
 def test_failed_board_does_not_stop_others(source):
-    assert len(source.fetch(SearchConfig(max_days_old=14))) == 3
+    assert len(source.fetch(SearchConfig(max_days_old=14, job_types=["full_time"]))) == 3
 
 
 @pytest.mark.parametrize("location, country, expected", [
@@ -156,3 +164,55 @@ def test_boards_file_round_trip(tmp_path):
 def test_same_company(board_name, key, same):
     from jobhunter.sources.boards import _same_company
     assert _same_company(board_name, key) is same
+
+
+@pytest.mark.parametrize("title, hint, expected", [
+    ("Data Analyst", "", "full_time"),
+    ("Data Science Intern, Summer 2027", "", "intern"),
+    ("Machine Learning Co-op", "", "intern"),
+    ("Data Analyst", "Intern", "intern"),
+    ("BI Analyst (Contract)", "", "contract"),
+    ("Data Analyst", "PartTime", "part_time"),
+    ("Data Analyst", "Part time", "part_time"),
+    ("Internal Audit Data Analyst", "Full time", "full_time"),
+])
+def test_classify_job_type(title, hint, expected):
+    assert classify_job_type(title, hint) == expected
+
+
+def test_workday_site_parse():
+    site = WorkdaySite.parse("https://capitalone.wd12.myworkdayjobs.com/en-US/Capital_One/details/x")
+    assert site.url == "https://capitalone.wd12.myworkdayjobs.com/Capital_One"
+    assert site.api == "https://capitalone.wd12.myworkdayjobs.com/wday/cxs/capitalone/Capital_One"
+    with pytest.raises(ValueError):
+        WorkdaySite.parse("https://example.com/careers")
+
+
+@pytest.mark.parametrize("text, days", [
+    ("Posted Today", 0), ("Posted Yesterday", 1), ("Posted 5 Days Ago", 5), ("Posted 30+ Days Ago", 30), ("", None),
+])
+def test_workday_age(text, days):
+    assert workday_age_days(text) == days
+
+
+def test_workday_source():
+    api = "acme.wd5.myworkdayjobs.com/wday/cxs/acme/External"
+    listing = {"total": 3, "jobPostings": [
+        {"title": "Data Analyst", "externalPath": "/job/NY/Data-Analyst_R1", "postedOn": "Posted Today",
+         "locationsText": "New York, NY", "timeType": "Full time"},
+        {"title": "Data Analyst", "externalPath": "/job/OLD/Data-Analyst_R2", "postedOn": "Posted 30+ Days Ago"},
+        {"title": "Recruiter", "externalPath": "/job/NY/Recruiter_R3", "postedOn": "Posted Today"},
+    ]}
+    detail = {"jobPostingInfo": {"title": "Data Analyst", "location": "New York, NY", "timeType": "Full time",
+                                 "startDate": NOW.date().isoformat(), "jobDescription": "<p>SQL</p>",
+                                 "country": {"descriptor": "United States of America"},
+                                 "externalUrl": "https://acme.wd5.myworkdayjobs.com/External/job/NY/Data-Analyst_R1"}}
+    seen = []
+    client = routed_client({f"{api}/jobs": (200, listing), f"{api}/job/NY/Data-Analyst_R1": (200, detail)}, seen)
+    src = CompanyBoardsSource([Board("ACME", "Acme", "workday", "https://acme.wd5.myworkdayjobs.com/External")],
+                              ["data analyst"], delay=0, client=client)
+    jobs = src.fetch(SearchConfig(max_days_old=14, queries=["data analyst"]))
+    assert [(j.title, j.source, j.description, j.job_type) for j in jobs] == [
+        ("Data Analyst", "workday", "SQL", "full_time")]
+    # Only the matching, recent posting's detail page was requested.
+    assert sum("/job/" in u for u in seen) == 1

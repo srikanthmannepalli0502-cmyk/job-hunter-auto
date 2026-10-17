@@ -1,11 +1,14 @@
-"""Company career boards on Greenhouse, Lever and Ashby, via their public job-board APIs.
+"""Company career sites: Greenhouse, Lever and Ashby job-board APIs, and Workday career sites.
 
 These APIs exist so companies can show their openings on other sites; they need no key.
 data/company_boards.csv lists which board each target company uses. `discover-boards`
 builds it from the H-1B sponsor table by trying likely board names for each company.
 
-Postings are kept only if they are in the US (or remote without a non-US country), full
-time, recent, and their title matches one of your preferred titles.
+Greenhouse, Lever and Ashby offer these APIs so companies can show openings elsewhere. Workday
+career sites load their postings from a JSON endpoint that robots.txt does not exclude; it is
+read politely (a delay between requests, a few pages per search). Postings are kept if they are
+in the US (or remote without a non-US country), one of your job types, recent, and their title
+matches one of your preferred titles.
 """
 
 import csv
@@ -20,7 +23,7 @@ import httpx
 
 from jobhunter.config import SearchConfig
 from jobhunter.models import JobListing
-from jobhunter.sources.base import JobSource
+from jobhunter.sources.base import JobSource, classify_job_type
 from jobhunter.sources.remotive import strip_html
 from jobhunter.sponsors import normalize_name
 
@@ -76,17 +79,14 @@ def title_matches(title: str, wanted: list[str]) -> bool:
     return any(w.lower() in t for w in wanted)
 
 
-_PART_TIME = re.compile(r"intern|co-?op|part[- ]?time|contract|temporary|seasonal", re.I)
-
-
 # ----------------------------------------------------------------------------- source
 
 @dataclass(frozen=True)
 class Board:
     employer_key: str
     employer: str
-    ats: str
-    slug: str
+    ats: str   # greenhouse, lever, ashby or workday
+    slug: str  # board name; for Workday the career site URL, e.g. https://acme.wd5.myworkdayjobs.com/External
 
 
 def load_boards(path: str | Path) -> list[Board]:
@@ -98,15 +98,17 @@ def load_boards(path: str | Path) -> list[Board]:
 
 
 class CompanyBoardsSource(JobSource):
-    """All openings on the target companies' Greenhouse, Lever and Ashby boards."""
+    """Openings on the target companies' Greenhouse, Lever, Ashby and Workday career sites."""
 
     name = "boards"
 
-    def __init__(self, boards: list[Board], titles: list[str], delay: float = 0.3, **kwargs):
+    def __init__(self, boards: list[Board], titles: list[str], delay: float = 0.3,
+                 workday_max_pages: int = 3, **kwargs):
         super().__init__(**kwargs)
         self.boards = boards
         self.titles = titles
         self.delay = delay
+        self.workday_max_pages = workday_max_pages
 
     def fetch(self, search: SearchConfig) -> list[JobListing]:
         since = datetime.now(timezone.utc) - timedelta(days=search.max_days_old)
@@ -115,13 +117,13 @@ class CompanyBoardsSource(JobSource):
         for board in self.boards:
             try:
                 # list(): the parsers are generators, so request errors surface while iterating.
-                postings = list(getattr(self, f"_fetch_{board.ats}")(board))
-            except (httpx.HTTPError, ValueError, KeyError) as e:
+                postings = list(getattr(self, f"_fetch_{board.ats}")(board, search, since))
+            except (httpx.HTTPError, ValueError, KeyError, TypeError) as e:
                 failed += 1
-                self.logger.debug(f"{board.ats}/{board.slug}: {e}")
+                self.logger.warning(f"{board.employer} ({board.ats}) failed: {e}")
                 continue
-            for job, country, full_time in postings:
-                if not title_matches(job.title, self.titles) or not full_time:
+            for job, country in postings:
+                if not title_matches(job.title, self.titles) or job.job_type not in search.job_types:
                     continue
                 if not is_us_location(job.location, country):
                     continue
@@ -138,33 +140,37 @@ class CompanyBoardsSource(JobSource):
         resp.raise_for_status()
         return resp.json()
 
-    def _fetch_greenhouse(self, b: Board):
+    def _fetch_greenhouse(self, b: Board, search: SearchConfig, since: datetime):
         data = self._get(GREENHOUSE.format(slug=b.slug) + "/jobs", content="true")
         for j in data.get("jobs", []):
             posted = j.get("first_published") or j.get("updated_at")
+            title = j.get("title", "").strip()
             yield JobListing(
-                title=j.get("title", "").strip(), company=b.employer,
+                title=title, company=b.employer,
                 location=(j.get("location") or {}).get("name", ""), job_url=j.get("absolute_url", ""),
                 source="greenhouse", description=strip_html(html.unescape(j.get("content") or "")),
                 date_posted=datetime.fromisoformat(posted) if posted else None,
-            ), "", not _PART_TIME.search(j.get("title", ""))
+                job_type=classify_job_type(title),
+            ), ""
 
-    def _fetch_lever(self, b: Board):
+    def _fetch_lever(self, b: Board, search: SearchConfig, since: datetime):
         data = self._get(LEVER.format(slug=b.slug), mode="json")
         if not isinstance(data, list):
             raise ValueError("board not found")
         for j in data:
             cat = j.get("categories") or {}
             created = j.get("createdAt")
+            title = j.get("text", "").strip()
             yield JobListing(
-                title=j.get("text", "").strip(), company=b.employer,
+                title=title, company=b.employer,
                 location=" / ".join(cat.get("allLocations") or [cat.get("location") or ""]),
                 job_url=j.get("hostedUrl", ""), source="lever",
                 description=j.get("descriptionPlain") or "",
                 date_posted=datetime.fromtimestamp(created / 1000, timezone.utc) if created else None,
-            ), j.get("country") or "", not _PART_TIME.search(f"{cat.get('commitment', '')} {j.get('text', '')}")
+                job_type=classify_job_type(title, cat.get("commitment", "")),
+            ), j.get("country") or ""
 
-    def _fetch_ashby(self, b: Board):
+    def _fetch_ashby(self, b: Board, search: SearchConfig, since: datetime):
         data = self._get(ASHBY.format(slug=b.slug))
         for j in data.get("jobs", []):
             if j.get("isListed") is False:
@@ -172,12 +178,91 @@ class CompanyBoardsSource(JobSource):
             locations = [j.get("location") or ""] + [s.get("location", "") for s in j.get("secondaryLocations") or []]
             country = ((j.get("address") or {}).get("postalAddress") or {}).get("addressCountry", "")
             posted = j.get("publishedAt")
+            title = j.get("title", "").strip()
             yield JobListing(
-                title=j.get("title", "").strip(), company=b.employer,
+                title=title, company=b.employer,
                 location=" / ".join(x for x in locations if x) + (" (Remote)" if j.get("isRemote") else ""),
                 job_url=j.get("jobUrl", ""), source="ashby", description=j.get("descriptionPlain") or "",
                 date_posted=datetime.fromisoformat(posted) if posted else None,
-            ), "" if len(locations) > 1 else country, j.get("employmentType") in (None, "FullTime")
+                job_type=classify_job_type(title, j.get("employmentType") or ""),
+            ), "" if len(locations) > 1 else country
+
+    def _fetch_workday(self, b: Board, search: SearchConfig, since: datetime):
+        """Workday career sites load postings from a JSON endpoint (/wday/cxs/...). Search it with
+        each of your queries, keep recent postings whose title matches, then read each one's
+        detail for the description, country and exact posting date."""
+        site = WorkdaySite.parse(b.slug)
+        max_age = (datetime.now(timezone.utc) - since).days
+        seen: set[str] = set()
+        for query in search.all_queries:
+            for page in range(self.workday_max_pages):
+                body = {"appliedFacets": {}, "limit": 20, "offset": page * 20, "searchText": query}
+                resp = self.client.post(site.api + "/jobs", json=body)
+                resp.raise_for_status()
+                data = resp.json()
+                postings = data.get("jobPostings") or []
+                for p in postings:
+                    path = p.get("externalPath", "")
+                    if not path or path in seen:
+                        continue
+                    seen.add(path)
+                    age = workday_age_days(p.get("postedOn", ""))
+                    title = p.get("title", "")
+                    if (age is not None and age > max_age) or not title_matches(title, self.titles):
+                        continue
+                    if any(w.lower() in title.lower() for w in search.exclude_keywords):
+                        continue  # e.g. senior roles: don't spend a detail request on them
+                    yield self._workday_detail(b, site, p)
+                    time.sleep(self.delay)
+                if (page + 1) * 20 >= (data.get("total") or 0) or not postings:
+                    break
+                time.sleep(self.delay)
+
+    def _workday_detail(self, b: Board, site: "WorkdaySite", p: dict):
+        resp = self.client.get(site.api + p["externalPath"])
+        resp.raise_for_status()
+        info = resp.json().get("jobPostingInfo", {})
+        title = (info.get("title") or p.get("title", "")).strip()
+        country = (info.get("country") or {}).get("descriptor", "")
+        start = info.get("startDate")
+        posted = (datetime.fromisoformat(start).replace(tzinfo=timezone.utc) if start
+                  else _days_ago(workday_age_days(p.get("postedOn", ""))))
+        return JobListing(
+            title=title, company=b.employer,
+            location=info.get("location") or p.get("locationsText", ""),
+            job_url=info.get("externalUrl") or site.url + p["externalPath"], source="workday",
+            description=strip_html(info.get("jobDescription") or ""), date_posted=posted,
+            job_type=classify_job_type(title, info.get("timeType") or p.get("timeType", "")),
+        ), ("US" if country == "United States of America" else "XX") if country else ""
+
+
+@dataclass(frozen=True)
+class WorkdaySite:
+    url: str  # https://acme.wd5.myworkdayjobs.com/External
+    api: str  # https://acme.wd5.myworkdayjobs.com/wday/cxs/acme/External
+
+    @classmethod
+    def parse(cls, url: str) -> "WorkdaySite":
+        m = re.match(r"(https://([^./]+)\.(wd\d+)\.myworkdayjobs\.com)/(?:[a-z]{2}-[A-Z]{2}/)?([^/?#]+)", url.strip())
+        if not m:
+            raise ValueError(f"not a Workday career site URL: {url}")
+        host, tenant, _, site = m.groups()
+        return cls(url=f"{host}/{site}", api=f"{host}/wday/cxs/{tenant}/{site}")
+
+
+def workday_age_days(posted_on: str) -> int | None:
+    """'Posted Today' -> 0, 'Posted Yesterday' -> 1, 'Posted 5 Days Ago' -> 5, 'Posted 30+ Days Ago' -> 30."""
+    text = (posted_on or "").lower()
+    if "today" in text:
+        return 0
+    if "yesterday" in text:
+        return 1
+    m = re.search(r"(\d+)\+?\s*day", text)
+    return int(m.group(1)) if m else None
+
+
+def _days_ago(days: int | None) -> datetime | None:
+    return None if days is None else datetime.now(timezone.utc) - timedelta(days=days)
 
 
 # ----------------------------------------------------------------------------- discovery

@@ -1,34 +1,83 @@
 employer_key,employer,ats,slug,board_name
-PINTEREST,"Pinterest, Inc.",greenhouse,pinterest,Pinterest
-BLOCK,"Block, Inc.",greenhouse,block,Block
-PEOPLE TECH GROUP,"People Tech Group, Inc",greenhouse,peopletech,People Tech
-ROBLOX,Roblox Corporation,greenhouse,roblox,Roblox
-CHIME FINANCIAL,"Chime Financial, Inc.",greenhouse,chime,"Chime Financial, Inc"
-AIRBNB,"AIRBNB, INC.",greenhouse,airbnb,Airbnb
-LYFT,"LYFT, Inc.",greenhouse,lyft,Lyft
-WAYMO,Waymo LLC,greenhouse,waymo,Waymo
-REDDIT,"Reddit, Inc.",greenhouse,reddit,Reddit
-INDEED,"Indeed, Inc.",greenhouse,indeed,Indeed
+PINTEREST,"Pinterest, Inc.",greenhouse,pinterest,pinterest
+BLOCK,"Block, Inc.",greenhouse,block,block
+PEOPLE TECH GROUP,"People Tech Group, Inc",greenhouse,peopletech,peopletech
+ROBLOX,Roblox Corporation,greenhouse,roblox,roblox
+CHIME FINANCIAL,"Chime Financial, Inc.",greenhouse,chime,chime
+AIRBNB,"AIRBNB, INC.",greenhouse,airbnb,airbnb
+LYFT,"LYFT, Inc.",greenhouse,lyft,lyft
+WAYMO,Waymo LLC,greenhouse,waymo,waymo
+REDDIT,"Reddit, Inc.",greenhouse,reddit,reddit
+INDEED,"Indeed, Inc.",greenhouse,indeed,indeed
 SPOTIFY USA,"SPOTIFY USA, INC.",lever,spotify,spotify
-STRIPE,"Stripe, Inc.",greenhouse,stripe,Stripe
-SOCIAL FINANCE,"Social Finance, LLC",greenhouse,socialfinance,Social Finance
-MOLOCO,"Moloco, Inc.",greenhouse,moloco,Moloco
-ROBINHOOD MARKETS,"Robinhood Markets, Inc.",greenhouse,robinhood,Robinhood
-POINT72,"Point72, L.P.",greenhouse,point72,Point72 
-COUPANG GLOBAL,Coupang Global LLC,greenhouse,coupang,Coupang
-DROPBOX,"Dropbox, Inc.",greenhouse,dropbox,Dropbox
-TORC ROBOTICS,"TORC Robotics, Inc.",greenhouse,torcrobotics,Torc Robotics
-AFFIRM,"Affirm, Inc.",greenhouse,affirm,Affirm
-DISCORD,"Discord, Inc.",greenhouse,discord,Discord
+STRIPE,"Stripe, Inc.",greenhouse,stripe,stripe
+SOCIAL FINANCE,"Social Finance, LLC",greenhouse,socialfinance,socialfinance
+MOLOCO,"Moloco, Inc.",greenhouse,moloco,moloco
+ROBINHOOD MARKETS,"Robinhood Markets, Inc.",greenhouse,robinhood,robinhood
+POINT72,"Point72, L.P.",greenhouse,point72,point72
+COUPANG GLOBAL,Coupang Global LLC,greenhouse,coupang,coupang
+DROPBOX,"Dropbox, Inc.",greenhouse,dropbox,dropbox
+TORC ROBOTICS,"TORC Robotics, Inc.",greenhouse,torcrobotics,torcrobotics
+AFFIRM,"Affirm, Inc.",greenhouse,affirm,affirm
+DISCORD,"Discord, Inc.",greenhouse,discord,discord
 SNOWFLAKE,Snowflake Inc.,ashby,snowflake,snowflake
-ZSCALER,"Zscaler, Inc.",greenhouse,zscaler,Zscaler
-FETCH REWARDS,"Fetch Rewards, Inc.",greenhouse,fetch,Fetch
-GODADDY COM,"GoDaddy.com, LLC",greenhouse,godaddy,GoDaddy
-NATERA,"Natera, Inc.",greenhouse,natera,Natera
-TWITCH INTERACTIVE,"Twitch Interactive, Inc.",greenhouse,twitch,Twitch
+ZSCALER,"Zscaler, Inc.",greenhouse,zscaler,zscaler
+FETCH REWARDS,"Fetch Rewards, Inc.",greenhouse,fetch,fetch
+GODADDY COM,"GoDaddy.com, LLC",greenhouse,godaddy,godaddy
+NATERA,"Natera, Inc.",greenhouse,natera,natera
+TWITCH INTERACTIVE,"Twitch Interactive, Inc.",greenhouse,twitch,twitch
 WAYVE TECHNOLOGIES,"Wayve Technologies, Inc",ashby,wayve,wayve
-FAIRE WHOLESALE,"Faire Wholesale, Inc.",greenhouse,faire,Faire
-84 51,84.51 LLC,greenhouse,8451,84.51° 
-CLOUDFLARE,"CLOUDFLARE, INC.",greenhouse,cloudflare,Cloudflare
-COINBASE,"Coinbase, Inc.",greenhouse,coinbase,Coinbase
-SQUAD SOFTWARE,"SQUAD SOFTWARE, INC.",greenhouse,squad,SQUAD
+FAIRE WHOLESALE,"Faire Wholesale, Inc.",greenhouse,faire,faire
+84 51,84.51 LLC,greenhouse,8451,8451
+CLOUDFLARE,"CLOUDFLARE, INC.",greenhouse,cloudflare,cloudflare
+COINBASE,"Coinbase, Inc.",greenhouse,coinbase,coinbase
+SQUAD SOFTWARE,"SQUAD SOFTWARE, INC.",greenhouse,squad,squad
+CAPITAL ONE SERVICES,"Capital One Services, LLC",workday,https://capitalone.wd12.myworkdayjobs.com/Capital_One,https://capitalone.wd12.myworkdayjobs.com/Capital_One
+ADOBE,Adobe Inc.,workday,https://adobe.wd5.myworkdayjobs.com/external_experienced,https://adobe.wd5.myworkdayjobs.com/external_experienced
+PAYPAL,"PayPal, Inc.",workday,https://paypal.wd1.myworkdayjobs.com/jobs,https://paypal.wd1.myworkdayjobs.com/jobs
+WELLS FARGO BANK N A,"WELLS FARGO BANK, N.A.",workday,https://wf.wd1.myworkdayjobs.com/WellsFargoJobs,https://wf.wd1.myworkdayjobs.com/WellsFargoJobs
+SNAP,SNAP INC.,workday,https://snapchat.wd1.myworkdayjobs.com/snap,https://snapchat.wd1.myworkdayjobs.com/snap
+CITIBANK N A,"Citibank, N.A.",workday,https://citi.wd5.myworkdayjobs.com/2,https://citi.wd5.myworkdayjobs.com/2
+HOME DEPOT MANAGEMENT,Home Depot Management Company LLC,workday,https://homedepot.wd5.myworkdayjobs.com/CareerDepot,https://homedepot.wd5.myworkdayjobs.com/CareerDepot
+CVS SHARED SERVICES RESOURCES,CVS Shared Services Resources LLC,workday,https://cvshealth.wd1.myworkdayjobs.com/CVS_Health_Careers,https://cvshealth.wd1.myworkdayjobs.com/CVS_Health_Careers
+CISCO SYSTEMS,"Cisco Systems, Inc.",workday,https://cisco.wd5.myworkdayjobs.com/Cisco_Careers,https://cisco.wd5.myworkdayjobs.com/Cisco_Careers
+EXPEDIA,"Expedia, Inc.",workday,https://expedia.wd108.myworkdayjobs.com/search,https://expedia.wd108.myworkdayjobs.com/search
+VISA U S A,Visa U.S.A. Inc.,workday,https://visa.wd5.myworkdayjobs.com/Visa,https://visa.wd5.myworkdayjobs.com/Visa
+INTEL,Intel Corporation,workday,https://intel.wd1.myworkdayjobs.com/External,https://intel.wd1.myworkdayjobs.com/External
+FIDELITY TECHNOLOGY GROUP LLC D B A FIDELITY INVESTMENTS,"Fidelity Technology Group, LLC d/b/a Fidelity Investments",workday,https://fmr.wd1.myworkdayjobs.com/FidelityCareers,https://fmr.wd1.myworkdayjobs.com/FidelityCareers
+CHEWY,"Chewy, Inc.",workday,https://chewy.wd5.myworkdayjobs.com/External,https://chewy.wd5.myworkdayjobs.com/External
+ELI LILLY AND,Eli Lilly and Company,workday,https://lilly.wd115.myworkdayjobs.com/LLY,https://lilly.wd115.myworkdayjobs.com/LLY
+RELX,"RELX, Inc.",workday,https://relx.wd3.myworkdayjobs.com/RELX,https://relx.wd3.myworkdayjobs.com/RELX
+EBAY,eBay Inc.,workday,https://ebay.wd5.myworkdayjobs.com/apply,https://ebay.wd5.myworkdayjobs.com/apply
+TARGET ENTERPRISE,"Target Enterprise, Inc.",workday,https://target.wd5.myworkdayjobs.com/targetcareers,https://target.wd5.myworkdayjobs.com/targetcareers
+THE VANGUARD GROUP,"The Vanguard Group, Inc.",workday,https://vanguard.wd5.myworkdayjobs.com/vanguard_external,https://vanguard.wd5.myworkdayjobs.com/vanguard_external
+ACCENTURE,Accenture LLP,workday,https://accenture.wd103.myworkdayjobs.com/AccentureCareers,https://accenture.wd103.myworkdayjobs.com/AccentureCareers
+ELEVANCE HEALTH,"Elevance Health, Inc.",workday,https://elevancehealth.wd1.myworkdayjobs.com/ANT,https://elevancehealth.wd1.myworkdayjobs.com/ANT
+APPLIED MATERIALS,"Applied Materials, Inc",workday,https://amat.wd1.myworkdayjobs.com/External,https://amat.wd1.myworkdayjobs.com/External
+SALESFORCE,"Salesforce, Inc.",workday,https://salesforce.wd12.myworkdayjobs.com/External_Career_Site,https://salesforce.wd12.myworkdayjobs.com/External_Career_Site
+SALESFORCE,"Salesforce, Inc.",workday,https://salesforce.wd12.myworkdayjobs.com/Futureforce_Internships,https://salesforce.wd12.myworkdayjobs.com/Futureforce_Internships
+U S BANK NATIONAL ASSOCIATION,U.S. Bank National Association,workday,https://usbank.wd1.myworkdayjobs.com/US_Bank_Careers,https://usbank.wd1.myworkdayjobs.com/US_Bank_Careers
+TRUIST BANK,Truist Bank,workday,https://truist.wd1.myworkdayjobs.com/Careers,https://truist.wd1.myworkdayjobs.com/Careers
+ONEMAIN GENERAL SERVICES,OneMain General Services Corporation,workday,https://myhrhome.wd1.myworkdayjobs.com/OneMainCareers,https://myhrhome.wd1.myworkdayjobs.com/OneMainCareers
+AT AND T SERVICES,"AT&T SERVICES, INC.",workday,https://att.wd1.myworkdayjobs.com/ATTGeneral,https://att.wd1.myworkdayjobs.com/ATTGeneral
+AMGEN,Amgen Inc.,workday,https://amgen.wd1.myworkdayjobs.com/Careers,https://amgen.wd1.myworkdayjobs.com/Careers
+COMCAST CABLE COMMUNICATIONS,"Comcast Cable Communications, LLC",workday,https://comcast.wd115.myworkdayjobs.com/Comcast_Careers,https://comcast.wd115.myworkdayjobs.com/Comcast_Careers
+HUMANA,Humana Inc.,workday,https://humana.wd5.myworkdayjobs.com/Humana_External_Career_Site,https://humana.wd5.myworkdayjobs.com/Humana_External_Career_Site
+GENENTECH,"Genentech, Inc.",workday,https://roche.wd3.myworkdayjobs.com/roche-ext,https://roche.wd3.myworkdayjobs.com/roche-ext
+THE PRUDENTIAL INSURANCE COMPANY OF AMERICA,The Prudential Insurance Company of America,workday,https://pru.wd5.myworkdayjobs.com/Careers,https://pru.wd5.myworkdayjobs.com/Careers
+ZILLOW,"Zillow, Inc.",workday,https://zillow.wd5.myworkdayjobs.com/Zillow_Group_External,https://zillow.wd5.myworkdayjobs.com/Zillow_Group_External
+ZOOM COMMUNICATIONS,"Zoom Communications, Inc.",workday,https://zoom.wd5.myworkdayjobs.com/Zoom,https://zoom.wd5.myworkdayjobs.com/Zoom
+AUTODESK,"Autodesk, Inc.",workday,https://autodesk.wd1.myworkdayjobs.com/Ext,https://autodesk.wd1.myworkdayjobs.com/Ext
+AUTODESK,"Autodesk, Inc.",workday,https://autodesk.wd1.myworkdayjobs.com/Uni,https://autodesk.wd1.myworkdayjobs.com/Uni
+FRACTAL ANALYTICS,"Fractal Analytics, Inc.",workday,https://fractal.wd1.myworkdayjobs.com/Careers,https://fractal.wd1.myworkdayjobs.com/Careers
+WORKDAY,"Workday, Inc.",workday,https://workday.wd5.myworkdayjobs.com/Workday,https://workday.wd5.myworkdayjobs.com/Workday
+CATERPILLAR,Caterpillar Inc.,workday,https://cat.wd5.myworkdayjobs.com/CaterpillarCareers,https://cat.wd5.myworkdayjobs.com/CaterpillarCareers
+HEALTH CARE SERVICE,HEALTH CARE SERVICE CORPORATION,workday,https://hcsc.wd1.myworkdayjobs.com/HCSC_External,https://hcsc.wd1.myworkdayjobs.com/HCSC_External
+GENERAL MOTORS,General Motors,workday,https://generalmotors.wd5.myworkdayjobs.com/Careers_GM,https://generalmotors.wd5.myworkdayjobs.com/Careers_GM
+NVIDIA,NVIDIA Corporation,workday,https://nvidia.wd5.myworkdayjobs.com/NVIDIAExternalCareerSite,https://nvidia.wd5.myworkdayjobs.com/NVIDIAExternalCareerSite
+BARCLAYS SERVICES,Barclays Services Corp.,workday,https://barclays.wd3.myworkdayjobs.com/External_Career_Site_Barclays,https://barclays.wd3.myworkdayjobs.com/External_Career_Site_Barclays
+TRUSTEES OF THE UNIVERSITY OF PENNSYLVANIA,TRUSTEES OF THE UNIVERSITY OF PENNSYLVANIA,workday,https://upenn.wd1.myworkdayjobs.com/careers-at-penn,https://upenn.wd1.myworkdayjobs.com/careers-at-penn
+DOORDASH,"DoorDash, Inc.",greenhouse,doordashusa,doordashusa
+MAPLEBEAR,Maplebear Inc.,greenhouse,instacart,instacart
+GROUPM WORLDWIDE,"GroupM Worldwide, LLC",greenhouse,wppmedia,wppmedia
+C3 AI,"C3.ai, Inc.",greenhouse,c3iot,c3iot

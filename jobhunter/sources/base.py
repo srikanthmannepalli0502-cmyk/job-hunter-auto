@@ -1,3 +1,4 @@
+import re
 from abc import ABC, abstractmethod
 
 import httpx
@@ -32,6 +33,25 @@ def dedupe(jobs: list[JobListing]) -> list[JobListing]:
             seen.add(job.dedupe_key)
             unique.append(job)
     return unique
+
+
+JOB_TYPES = ("full_time", "part_time", "intern", "contract")
+_INTERN = re.compile(r"\bintern(ship)?s?\b|\bco-?op\b|\bapprentice", re.I)
+_CONTRACT = re.compile(r"\bcontract|\btemporary\b|\btemp\b|\bseasonal\b|fixed[- ]term|freelance", re.I)
+_PART_TIME = re.compile(r"part[- ]?time", re.I)
+
+
+def classify_job_type(title: str, *hints: str) -> str:
+    """full_time, part_time, intern or contract, from the title and any employment-type text
+    the source provides (e.g. Lever "Intern", Ashby "PartTime", Workday "Part time")."""
+    text = " ".join([title, *(h or "" for h in hints)])
+    if _INTERN.search(text):
+        return "intern"
+    if _CONTRACT.search(text):
+        return "contract"
+    if _PART_TIME.search(text) or "parttime" in text.lower().replace(" ", ""):
+        return "part_time"
+    return "full_time"
 
 
 def is_excluded(job: JobListing, exclude_keywords: list[str]) -> bool:

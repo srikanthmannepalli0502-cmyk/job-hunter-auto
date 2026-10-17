@@ -36,13 +36,19 @@ flowchart LR
 ## Company career boards
 
 Many companies publish their openings through **public job-board APIs** on Greenhouse, Lever
-and Ashby (the feeds that power their own careers pages). `discover-boards` takes your top
+and Ashby (the feeds that power their own careers pages). Large employers often use **Workday**
+instead; their career sites (`https://<company>.wd<N>.myworkdayjobs.com/<site>`) load postings
+from a JSON endpoint that their robots.txt doesn't exclude. Job Hunter reads it politely: your
+search queries only, a few pages each, a pause between requests, and a detail request only for
+recent postings whose title matches and isn't excluded. Add a Workday site as a row with
+`ats = workday` and the career site URL as `slug`. `discover-boards` takes your top
 H-1B sponsors, tries likely board names for each one (checking the company name where the API
 returns it), and writes `data/company_boards.csv`. Every `search` then reads those boards and
 keeps postings that:
 
 - match one of your `preferred_titles`,
-- are full time (no intern, contract, part-time),
+- are one of your `job_types` (full_time, part_time, intern, contract; classified from the
+  title and the board's employment type),
 - are in the US, or remote without another country named,
 - were posted within `max_days_old` days.
 
@@ -52,8 +58,8 @@ python -m jobhunter search                                        # includes the
 ```
 
 Review `data/company_boards.csv` after discovery and delete any row that points at a different
-company with a similar name. Companies on Workday or other systems without a public board are
-not covered; check their careers pages yourself.
+company with a similar name. Companies that build their own careers sites (Amazon, Google,
+Meta, Microsoft, Apple and others) aren't covered; check their careers pages yourself.
 
 ## H-1B sponsorship
 
@@ -138,7 +144,7 @@ jobhunter/
 ├── sources/
 │   ├── base.py         # JobSource interface, dedupe, exclusions
 │   ├── adzuna.py       # Adzuna API
-│   ├── boards.py       # Greenhouse / Lever / Ashby company boards + discovery
+│   ├── boards.py       # Greenhouse / Lever / Ashby / Workday career sites + discovery
 │   └── remotive.py     # Remotive API
 └── resume/
     ├── parser.py       # read PDF/DOCX resumes

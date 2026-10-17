@@ -23,6 +23,8 @@ max_days_old = 14
 include_remote = true         # also search Remotive's remote jobs
 exclude_keywords = ["senior", "lead", "director", "principal"]
 min_score = 40                # skip jobs that score below this (0-100)
+# Kinds of positions to keep: full_time, part_time, intern, contract
+job_types = ["full_time", "part_time", "intern", "contract"]
 
 [scoring]
 # Earlier titles score higher.

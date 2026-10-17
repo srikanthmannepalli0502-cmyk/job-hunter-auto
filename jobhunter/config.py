@@ -32,6 +32,8 @@ class SearchConfig:
     include_remote: bool = True
     exclude_keywords: list[str] = field(default_factory=list)
     min_score: float = 0  # jobs scoring below this are not stored
+    # Which kinds of positions to keep: full_time, part_time, intern, contract.
+    job_types: list[str] = field(default_factory=lambda: ["full_time", "part_time", "intern", "contract"])
 
     @property
     def all_queries(self) -> list[str]:

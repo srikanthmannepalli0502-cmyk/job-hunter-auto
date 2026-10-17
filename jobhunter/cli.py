@@ -39,7 +39,8 @@ def print_jobs(jobs) -> None:
         return
     for job in jobs:
         print(f"[{job.id:>4}] {job.overall_score:5.1f}  {job.title} @ {job.company}")
-        details = " | ".join(x for x in (job.location, job.source, _salary(job)) if x)
+        kind = (job.job_type or "").replace("_", "-") if job.job_type not in (None, "full_time") else ""
+        details = " | ".join(x for x in (kind.upper(), job.location, job.source, _salary(job)) if x)
         print(f"        {details}")
         if job.sponsor_note:
             badge = "H-1B ok " if job.sponsor_score > 0 else "NO H-1B "
@@ -58,7 +59,8 @@ def cmd_search(args, profile, tracker) -> None:
         except Exception as e:  # one failing source shouldn't stop the run
             logger.error(f"{source.name} failed: {e}")
 
-    jobs = [j for j in dedupe(jobs) if not is_excluded(j, profile.search.exclude_keywords)]
+    jobs = [j for j in dedupe(jobs) if not is_excluded(j, profile.search.exclude_keywords)
+            and j.job_type in profile.search.job_types]
     ranked = rank_jobs(jobs, profile.scoring)
     relevant = [j for j in ranked if j.match_score >= profile.search.min_score]
     relevant = apply_sponsorship(relevant, SponsorDB.load(profile.sponsorship.data_file), profile.sponsorship)
