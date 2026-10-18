@@ -59,7 +59,9 @@ def run_search(profile: Profile, tracker: Tracker) -> RunSummary:
     relevant = [j for j in ranked if j.match_score >= profile.search.min_score]
     relevant = apply_sponsorship(relevant, SponsorDB.load(profile.sponsorship.data_file), profile.sponsorship)
     summary.new, summary.seen_again = tracker.save_seen(relevant)
-    summary.closed = tracker.close_stale(CLOSE_AFTER_DAYS)
+    # An offline run didn't really check the sites, so it must not close anything.
+    if not any(getattr(s, "offline", False) for s in sources):
+        summary.closed = tracker.close_stale(CLOSE_AFTER_DAYS)
     tracker.finish_run(run, fetched=summary.fetched, new=len(summary.new), seen_again=summary.seen_again,
                        closed=summary.closed, problems="\n".join(summary.problems) or None)
     logger.info(f"Run {run.id}: {summary.line()}")

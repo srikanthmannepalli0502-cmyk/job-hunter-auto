@@ -145,3 +145,35 @@ def test_runs_are_recorded(tracker):
     tracker.finish_run(run, fetched=10, new=3, seen_again=7, problems="Acme (workday) failed")
     [r] = tracker.recent_runs()
     assert (r.fetched, r.new, r.seen_again, r.problems) == (10, 3, 7, "Acme (workday) failed") and r.finished
+
+
+def _failing_client(fail_times: dict):
+    """Greenhouse boards that raise a network error the first `n` times they're requested."""
+    import httpx
+
+    calls: dict[str, int] = {}
+
+    def handler(request):
+        slug = request.url.path.split("/")[3]  # /v1/boards/<slug>/jobs
+        calls[slug] = calls.get(slug, 0) + 1
+        if calls[slug] <= fail_times.get(slug, 0):
+            raise httpx.ConnectError("getaddrinfo failed", request=request)
+        return httpx.Response(200, json={"jobs": []})
+
+    return httpx.Client(transport=httpx.MockTransport(handler)), calls
+
+
+def test_network_hiccup_is_retried_once():
+    client, calls = _failing_client({"a": 1})
+    src = CompanyBoardsSource([Board("A", "A", "greenhouse", "a")], TITLES, delay=0, client=client)
+    src.fetch(SearchConfig())
+    assert calls["a"] == 2 and src.failures == [] and not src.offline
+
+
+def test_lost_connection_stops_the_run():
+    boards = [Board(str(i), f"Co{i}", "greenhouse", f"s{i}") for i in range(10)]
+    client, calls = _failing_client({f"s{i}": 99 for i in range(10)})
+    src = CompanyBoardsSource(boards, TITLES, delay=0, client=client)
+    src.fetch(SearchConfig())
+    assert src.offline and len(calls) == 4  # stopped after 4 sites in a row
+    assert len(src.failures) == 1 and src.failures[0].startswith("offline:")

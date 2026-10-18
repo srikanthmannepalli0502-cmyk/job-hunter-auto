@@ -114,21 +114,71 @@ pip install -r requirements.txt
 
 ## Usage
 
+### The daily routine
+
+1. **Gather (automatic):** a Windows scheduled task runs `jobhunter run` at 10:00 and 18:00. Each
+   run reads every source, filters and scores the postings, stores new jobs, refreshes the
+   `last seen` date of jobs found again (so nothing is duplicated) and marks jobs that haven't
+   been seen for 3 days as closed. Set it up once:
+
+   ```bash
+   powershell -ExecutionPolicy Bypass -File scripts\install_schedule.ps1
+   ```
+
+   If the PC is off or asleep at a run time, Windows runs it as soon as it's back.
+   Output goes to `logs\scheduled.log`; `python -m jobhunter runs` lists recent runs and any
+   source that failed.
+
+2. **Review (you):** `python -m jobhunter review` opens a page in your browser (served only to
+   this PC at http://127.0.0.1:8765) with the open jobs ranked by fit + H-1B sponsorship.
+   Shortlist or skip each one; skipped jobs stay hidden even when later runs find them again.
+
+3. **Prepare (one click):** on a job's page, *Prepare kit* writes a tailored one-page resume
+   (from your master resume) and a short cover note to `resumes/tailored/`.
+
+4. **Apply (you):** *Open posting*, apply on the company's site, then *Mark applied*. The
+   application records which resume and cover note you sent; update its status later on the
+   *Applications* tab.
+
+Job Hunter never submits applications for you: career sites need accounts, screening
+questions and sometimes assessments, and only you should send anything in your name.
+
+### Commands
+
 ```bash
-python -m jobhunter search                 # fetch, score and store new jobs
-python -m jobhunter list                   # top jobs you haven't applied to
-python -m jobhunter tailor 12              # tailored PDF for job #12
-python -m jobhunter tailor 12 --jd-file jd/acme.txt   # ...using the full posting text
-python -m jobhunter open 12                # open posting, then log that you applied
+python -m jobhunter run                     # gather, rank and store (what the schedule runs)
+python -m jobhunter review                  # the review page
+python -m jobhunter list                    # top open jobs in the terminal
+python -m jobhunter shortlist 12 15         # or: skip 12 / unskip 12
+python -m jobhunter kit 12                  # tailored resume + cover note for job #12
+python -m jobhunter kit 12 --jd-file jd/acme.txt   # ...using the full posting text
+python -m jobhunter open 12                 # open posting, then log that you applied
+python -m jobhunter applied 12              # log an application (records the kit you sent)
 python -m jobhunter status 3 interview --notes "Phone screen Mon"
-python -m jobhunter applications           # your application history
+python -m jobhunter applications            # your application history
+python -m jobhunter runs                    # recent runs and source problems
 python -m jobhunter sponsor "Capital One"   # H-1B sponsorship of a company
 ```
 
-**Tip:** Adzuna's API returns a shortened description. For the best tailoring, copy the full
-posting into a text file and pass `--jd-file`.
+### Where everything is kept
 
-**Always review the tailored resume before sending it.** LLMs can make mistakes.
+| What | Where |
+|---|---|
+| Jobs, scores, your decisions, applications (with the resume and cover note sent), runs | `jobhunter.db` (SQLite) |
+| Tailored resumes and cover notes | `resumes/tailored/` |
+| Your master resume and profile | `resumes/master_resume.txt`, `profile.toml` |
+| Run logs | `logs/` |
+
+All of these are gitignored and stay on your PC.
+
+### Resume quality checks
+
+Tailoring asks the LLM for a one-page version of your master resume, then checks it: the name
+and contact lines are restored if dropped, skills not in your master resume are removed,
+every number in a bullet must appear in the same job or project of the master resume, and a
+page that overflows is rewritten shorter (whole bullets are dropped only as a last resort).
+Anything left is printed as a CHECK line. **Always read the resume and cover note before
+sending them.**
 
 ## Project layout
 
@@ -140,16 +190,20 @@ jobhunter/
 ├── scoring.py          # 0-100 job scoring
 ├── sponsors.py         # H-1B sponsor matching and score
 ├── tracker.py          # SQLAlchemy models + job/application store
-├── llm.py              # Groq client with rate-limit retries
+├── llm.py              # Azure OpenAI (Entra ID) or Groq client
+├── pipeline.py         # run_search and prepare_kit, shared by the CLI, schedule and review page
+├── web.py              # local review page
 ├── sources/
 │   ├── base.py         # JobSource interface, dedupe, exclusions
 │   ├── adzuna.py       # Adzuna API
-│   ├── boards.py       # Greenhouse / Lever / Ashby / Workday career sites + discovery
+│   ├── boards.py       # Greenhouse, Lever, Ashby, Workday, Oracle, SmartRecruiters, Amazon + discovery
 │   └── remotive.py     # Remotive API
 └── resume/
-    ├── parser.py       # read PDF/DOCX resumes
+    ├── parser.py       # read PDF/DOCX/TXT resumes
     ├── pdf.py          # ATS-friendly PDF rendering + page-fit check
-    └── tailor.py       # prompt, must-keep validation, one-page trimming
+    ├── tailor.py       # prompt, quality checks, one-page fitting
+    └── cover.py        # cover note
+scripts/                # run_scheduled.cmd + install_schedule.ps1 (Windows Task Scheduler)
 tests/                  # pytest suite (APIs mocked, LLM faked); runs in GitHub Actions
 ```
 

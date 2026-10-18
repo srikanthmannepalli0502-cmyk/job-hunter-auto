@@ -33,6 +33,7 @@ ASHBY = "https://api.ashbyhq.com/posting-api/job-board/{slug}"
 SMARTRECRUITERS = "https://api.smartrecruiters.com/v1/companies/{slug}/postings"
 AMAZON = "https://www.amazon.jobs/en/search.json"
 BOARD_COLUMNS = ["employer_key", "employer", "ats", "slug", "board_name"]
+OFFLINE_AFTER = 4  # network errors on this many sites in a row = the internet is down
 
 # ----------------------------------------------------------------------------- filters
 
@@ -110,19 +111,33 @@ class CompanyBoardsSource(JobSource):
         self.boards = boards
         self.titles = titles
         self.delay = delay
+        self.retry_pause = 5 if delay else 0
         self.workday_max_pages = workday_max_pages
+        self.failures: list[str] = []
+        self.offline = False
 
     def fetch(self, search: SearchConfig) -> list[JobListing]:
         since = datetime.now(timezone.utc) - timedelta(days=search.max_days_old)
         jobs: list[JobListing] = []
         failed = 0
         self.failures: list[str] = []
-        for board in self.boards:
+        self.offline = False
+        network_errors_in_a_row = 0
+        for n, board in enumerate(self.boards):
             try:
-                # list(): the parsers are generators, so request errors surface while iterating.
-                postings = list(getattr(self, f"_fetch_{board.ats}")(board, search, since))
+                postings = self._fetch_board(board, search, since)
+                network_errors_in_a_row = 0
             except (httpx.HTTPError, ValueError, KeyError, TypeError) as e:
                 failed += 1
+                network_errors_in_a_row = network_errors_in_a_row + 1 if isinstance(e, httpx.TransportError) else 0
+                if network_errors_in_a_row >= OFFLINE_AFTER:
+                    # The internet is gone (PC asleep, Wi-Fi dropped): stop instead of failing every board.
+                    self.offline = True
+                    skipped = len(self.boards) - n - 1
+                    self.failures = self.failures[: -(OFFLINE_AFTER - 1)] + [
+                        f"offline: lost the internet connection; stopped with {skipped + OFFLINE_AFTER} sites unchecked"]
+                    self.logger.error(self.failures[-1])
+                    break
                 self.failures.append(f"{board.employer} ({board.ats}): {str(e)[:150]}")
                 self.logger.warning(f"{board.employer} ({board.ats}) failed: {e}")
                 continue
@@ -138,6 +153,16 @@ class CompanyBoardsSource(JobSource):
         self.logger.info(f"Company boards: {len(jobs)} matching jobs from {len(self.boards) - failed} "
                          f"boards ({failed} failed)")
         return jobs
+
+    def _fetch_board(self, board: Board, search: SearchConfig, since: datetime) -> list:
+        """One site's postings; a network hiccup gets one retry after a short pause."""
+        fetch = getattr(self, f"_fetch_{board.ats}")
+        try:
+            # list(): the parsers are generators, so request errors surface while iterating.
+            return list(fetch(board, search, since))
+        except httpx.TransportError:
+            time.sleep(self.retry_pause)
+            return list(fetch(board, search, since))
 
     def _get(self, url: str, **params):
         resp = self.client.get(url, params=params)
