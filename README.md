@@ -41,7 +41,10 @@ instead; their career sites (`https://<company>.wd<N>.myworkdayjobs.com/<site>`)
 from a JSON endpoint that their robots.txt doesn't exclude. Job Hunter reads it politely: your
 search queries only, a few pages each, a pause between requests, and a detail request only for
 recent postings whose title matches and isn't excluded. Add a Workday site as a row with
-`ats = workday` and the career site URL as `slug`. `discover-boards` takes your top
+`ats = workday` and the career site URL as `slug`. It also reads **Oracle Recruiting Cloud** career sites
+(`ats = oracle`, the site URL as `slug`), **SmartRecruiters** (`ats = smartrecruiters`, the
+company id) and **amazon.jobs** (`ats = amazon`). Sites that only answer a signed-in browser
+session (Eightfold, used by Microsoft and American Express) are not read. `discover-boards` takes your top
 H-1B sponsors, tries likely board names for each one (checking the company name where the API
 returns it), and writes `data/company_boards.csv`. Every `search` then reads those boards and
 keeps postings that:
