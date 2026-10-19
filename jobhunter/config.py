@@ -97,7 +97,8 @@ def load_profile(path: Path = DEFAULT_PROFILE_PATH) -> Profile:
         name=candidate.get("name", ""),
         linkedin_url=candidate.get("linkedin_url", ""),
         base_resume=candidate.get("base_resume", "resumes/base_resume.pdf"),
-        output_dir=candidate.get("output_dir", "resumes/tailored"),
+        # JOBHUNTER_OUTPUT_DIR overrides it, e.g. persistent storage when hosted.
+        output_dir=os.getenv("JOBHUNTER_OUTPUT_DIR") or candidate.get("output_dir", "resumes/tailored"),
         must_keep=candidate.get("must_keep", []),
         search=SearchConfig(**data.get("search", {})),
         scoring=ScoringConfig(

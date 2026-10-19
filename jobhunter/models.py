@@ -1,4 +1,4 @@
-from dataclasses import dataclass, field
+from dataclasses import asdict, dataclass, field, fields
 from datetime import datetime, timezone
 
 
@@ -27,3 +27,21 @@ class JobListing:
     def dedupe_key(self) -> str:
         """Same role at the same company counts as one job, even if posted on several boards."""
         return f"{self.title.lower().strip()}|{self.company.lower().strip()}"
+
+    def to_dict(self) -> dict:
+        """JSON-friendly copy (dates as ISO text), for sending results to the hosted app."""
+        d = asdict(self)
+        for k in ("date_posted", "date_fetched"):
+            d[k] = d[k].isoformat() if d[k] else None
+        return d
+
+    @classmethod
+    def from_dict(cls, d: dict) -> "JobListing":
+        known = {f.name for f in fields(cls)}
+        data = {k: v for k, v in d.items() if k in known}
+        for k in ("date_posted", "date_fetched"):
+            if data.get(k):
+                data[k] = datetime.fromisoformat(data[k])
+            elif k == "date_fetched":
+                data.pop(k, None)
+        return cls(**data)

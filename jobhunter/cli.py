@@ -15,6 +15,7 @@
 """
 
 import argparse
+import os
 import sys
 import webbrowser
 from datetime import datetime
@@ -23,7 +24,7 @@ from pathlib import Path
 from loguru import logger
 
 from jobhunter.config import DEFAULT_PROFILE_PATH, load_profile, settings
-from jobhunter.pipeline import prepare_kit, run_search
+from jobhunter.pipeline import gather, prepare_kit, push, run_search
 from jobhunter.sources.base import USER_AGENT
 from jobhunter.sources.boards import find_board, write_boards
 from jobhunter.sponsors import SponsorDB, describe, sponsor_score
@@ -58,6 +59,17 @@ def cmd_run(args, profile, tracker) -> None:
         log_dir = Path("logs")
         log_dir.mkdir(exist_ok=True)
         logger.add(log_dir / f"run_{datetime.now():%Y-%m-%d}.log", level="INFO", encoding="utf-8")
+    if args.push:
+        # The hosted app owns the database: gather here, let it store.
+        token = os.environ.get("JOBHUNTER_API_TOKEN", "")
+        if not token:
+            sys.exit("JOBHUNTER_API_TOKEN is not set")
+        gathered = gather(profile)
+        result = push(gathered, args.push, token)
+        print(f"\nSent {len(gathered.jobs)} jobs: {result.get('summary', result)}")
+        for p in gathered.problems:
+            print(f"  problem: {p}")
+        return
     summary = run_search(profile, tracker)
     print(f"\n{summary.line()}\n")
     print_jobs(sorted(summary.new, key=lambda j: j.overall_score, reverse=True)[: args.top])
@@ -160,7 +172,7 @@ def cmd_runs(args, profile, tracker) -> None:
 def cmd_review(args, profile, tracker) -> None:
     from jobhunter.web import serve
 
-    serve(profile, tracker, port=args.port, open_browser=not args.no_browser)
+    serve(profile, tracker, host=args.host, port=args.port, open_browser=not args.no_browser)
 
 
 def cmd_sponsor(args, profile, tracker) -> None:
@@ -215,10 +227,13 @@ def build_parser() -> argparse.ArgumentParser:
         s = sub.add_parser(name, help="gather, rank and store jobs from every source")
         s.add_argument("--top", type=int, default=15)
         s.add_argument("--log", action="store_true", help="also write logs/run_<date>.log")
+        s.add_argument("--push", metavar="APP_URL", help="send results to the hosted review app instead of "
+                                                         "storing them here (token: JOBHUNTER_API_TOKEN)")
         s.set_defaults(func=cmd_run)
 
     s = sub.add_parser("review", help="open the review page in your browser")
-    s.add_argument("--port", type=int, default=8765)
+    s.add_argument("--port", type=int, default=int(os.environ.get("PORT", 8765)))
+    s.add_argument("--host", default="127.0.0.1", help="0.0.0.0 when hosted (e.g. Azure App Service)")
     s.add_argument("--no-browser", action="store_true")
     s.set_defaults(func=cmd_review)
 

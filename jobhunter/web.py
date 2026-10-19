@@ -1,18 +1,34 @@
-"""Review page: a small local website (http://127.0.0.1:8765) over the tracker database.
+"""Review app over the tracker database: runs on your PC or hosted (e.g. Azure App Service).
 
-Ranked open jobs -> Shortlist / Skip -> Prepare kit (tailored resume + cover note) -> open the
-posting and apply yourself -> Mark applied (records the kit you sent) -> update status later.
-Uses only the standard library and listens on 127.0.0.1, so it's reachable from this PC only.
+Ranked open jobs -> Shortlist (a tailored resume is generated in the background) or Skip ->
+Apply (opens the posting) -> Mark applied (records the resume and cover note you sent) ->
+update status later. A cover note is written only when you ask for one.
+
+Local:  python -m jobhunter review                 (127.0.0.1 only, no sign-in)
+Hosted: python -m jobhunter review --host 0.0.0.0 --no-browser, behind the platform's sign-in
+        (Azure App Service authentication). Set JOBHUNTER_ALLOWED_USERS to the email(s) allowed
+        in; the platform passes the signed-in user in the X-MS-CLIENT-PRINCIPAL-NAME header and
+        strips that header from incoming requests, so it can't be forged.
+API (Bearer JOBHUNTER_API_TOKEN): POST /api/ingest (a gathered run), GET /api/backup (the
+database), POST /api/restore (load a database into an empty app).
 """
 
+import hmac
 import html
+import json
+import os
+import queue
+import sqlite3
+import tempfile
 import threading
 import webbrowser
+from contextlib import closing
 from datetime import datetime, timezone
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from urllib.parse import parse_qs, quote, urlparse
 
+from loguru import logger
 from sqlalchemy import or_, select
 
 from jobhunter.config import Profile
@@ -26,7 +42,6 @@ VIEWS = {
     "closed": "Closed",
 }
 PAGE_SIZE = 200
-_kit_lock = threading.Lock()  # one LLM job at a time
 
 CSS = """
 :root{--bg:#f7f7f5;--card:#fff;--fg:#1d1d1f;--muted:#6b6b70;--line:#e3e3e0;--accent:#2457c5;--ok:#1b7f3b;--warn:#a15c00;--bad:#b42318}
@@ -34,16 +49,18 @@ CSS = """
 *{box-sizing:border-box}body{margin:0;font:14px/1.45 system-ui,Segoe UI,sans-serif;background:var(--bg);color:var(--fg)}
 header{display:flex;gap:16px;align-items:center;padding:12px 20px;border-bottom:1px solid var(--line);background:var(--card);flex-wrap:wrap}
 header b{font-size:16px}nav a{margin-right:12px;color:var(--muted);text-decoration:none}nav a.on{color:var(--accent);font-weight:600}
+header .who{margin-left:auto;color:var(--muted);font-size:12px}
 main{padding:16px 20px;max-width:1300px;margin:auto}a{color:var(--accent)}
-table{width:100%;border-collapse:collapse;background:var(--card);border:1px solid var(--line)}
+.tablewrap{overflow-x:auto}table{width:100%;border-collapse:collapse;background:var(--card);border:1px solid var(--line)}
 th,td{padding:7px 8px;border-bottom:1px solid var(--line);text-align:left;vertical-align:top}th{font-size:12px;color:var(--muted);font-weight:600}
 td.num{text-align:right;font-variant-numeric:tabular-nums}.muted{color:var(--muted)}.ok{color:var(--ok)}.warn{color:var(--warn)}.bad{color:var(--bad)}
-.tag{display:inline-block;padding:1px 6px;border-radius:9px;font-size:11px;border:1px solid var(--line);color:var(--muted)}
-form.inline{display:inline}button{font:inherit;padding:3px 9px;border-radius:6px;border:1px solid var(--line);background:var(--card);color:var(--fg);cursor:pointer}
-button.primary{background:var(--accent);border-color:var(--accent);color:#fff}input,select{font:inherit;padding:4px 6px;border:1px solid var(--line);border-radius:6px;background:var(--card);color:var(--fg)}
+.tag{display:inline-block;padding:1px 6px;border-radius:9px;font-size:11px;border:1px solid var(--line);color:var(--muted);margin-left:4px}
+form.inline{display:inline}button,.btn{font:inherit;padding:3px 9px;border-radius:6px;border:1px solid var(--line);background:var(--card);color:var(--fg);cursor:pointer;text-decoration:none;display:inline-block}
+button.primary,.btn.primary{background:var(--accent);border-color:var(--accent);color:#fff}input,select{font:inherit;padding:4px 6px;border:1px solid var(--line);border-radius:6px;background:var(--card);color:var(--fg)}
 .card{background:var(--card);border:1px solid var(--line);border-radius:8px;padding:14px 16px;margin-bottom:12px}
 pre{white-space:pre-wrap;font:13px/1.5 system-ui,sans-serif;margin:0}.filters{margin-bottom:12px;display:flex;gap:8px;flex-wrap:wrap;align-items:center}
 .flash{padding:8px 12px;border-radius:6px;background:var(--card);border:1px solid var(--line);margin-bottom:12px}
+.row{display:flex;gap:8px;flex-wrap:wrap;align-items:center;margin:8px 0}
 """
 
 
@@ -59,21 +76,59 @@ def _ago(dt: datetime | None) -> str:
     return "today" if days <= 0 else f"{days}d ago"
 
 
+class KitWorker:
+    """Generates resumes / cover notes one at a time in the background (keeps within the LLM's rate limit)."""
+
+    def __init__(self, app: "App"):
+        self.app = app
+        self.jobs: queue.Queue = queue.Queue()
+        self.status: dict[int, str] = {}  # job id -> queued / generating / failed: ... / done note
+        threading.Thread(target=self._loop, daemon=True).start()
+
+    def submit(self, job_id: int, what: str = "resume") -> None:
+        if self.status.get(job_id) in ("queued", "generating"):
+            return
+        self.status[job_id] = "queued"
+        self.jobs.put((job_id, what))
+
+    def _loop(self) -> None:
+        from jobhunter.pipeline import make_cover_note, make_resume
+
+        while True:
+            job_id, what = self.jobs.get()
+            self.status[job_id] = "generating"
+            try:
+                if what == "cover":
+                    ok = make_cover_note(self.app.profile, self.app.tracker, job_id)
+                    self.status[job_id] = "Cover note ready." if ok else "failed: the LLM returned nothing"
+                else:
+                    path, warnings = make_resume(self.app.profile, self.app.tracker, job_id)
+                    self.status[job_id] = ("Resume ready." + (" Check: " + "; ".join(warnings) if warnings else "")
+                                           if path else "failed: could not fit the resume on one page")
+            except Exception as e:  # noqa: BLE001 - shown on the job page
+                logger.exception(f"kit for job {job_id} failed")
+                self.status[job_id] = f"failed: {e}"
+
+
 class App:
     def __init__(self, profile: Profile, tracker: Tracker):
         self.profile = profile
         self.tracker = tracker
         self.files_root = Path(profile.output_dir).resolve()
+        self.allowed_users = {u.strip().lower() for u in os.environ.get("JOBHUNTER_ALLOWED_USERS", "").split(",") if u.strip()}
+        self.api_token = os.environ.get("JOBHUNTER_API_TOKEN", "")
+        self.worker = KitWorker(self)
 
     # ------------------------------------------------------------------ pages
-    def page(self, title: str, body: str, view: str = "", flash: str = "") -> str:
+    def page(self, title: str, body: str, view: str = "", flash: str = "", user: str = "") -> str:
         nav = "".join(f'<a href="/?view={k}" class="{"on" if k == view else ""}">{v}</a>' for k, v in VIEWS.items())
         nav += f'<a href="/applications" class="{"on" if view == "apps" else ""}">Applications</a>'
         nav += f'<a href="/runs" class="{"on" if view == "runs" else ""}">Runs</a>'
+        who = f'<span class="who">{_e(user)}</span>' if user else ""
         flash_html = f'<div class="flash">{_e(flash)}</div>' if flash else ""
         return (f"<!doctype html><html><head><meta charset='utf-8'><meta name='viewport' content='width=device-width,initial-scale=1'>"
                 f"<title>{_e(title)} - Job Hunter</title><style>{CSS}</style></head><body>"
-                f"<header><b>Job Hunter</b><nav>{nav}</nav></header><main>{flash_html}{body}</main></body></html>")
+                f"<header><b>Job Hunter</b><nav>{nav}</nav>{who}</header><main>{flash_html}{body}</main></body></html>")
 
     def jobs_query(self, view: str, q: str, job_type: str):
         applied = select(Application.job_id)
@@ -92,12 +147,20 @@ class App:
             stmt = stmt.where(Job.job_type == job_type)
         return stmt.order_by(Job.overall_score.desc(), Job.date_fetched.desc()).limit(PAGE_SIZE)
 
-    def list_page(self, params: dict, flash: str = "") -> str:
+    def resume_state(self, j: Job) -> str:
+        state = self.worker.status.get(j.id, "")
+        if state in ("queued", "generating"):
+            return '<span class="tag">resume: generating&hellip;</span>'
+        if state.startswith("failed"):
+            return '<span class="tag bad">resume failed</span>'
+        return '<span class="tag">resume ready</span>' if j.kit_resume_path else ""
+
+    def list_page(self, params: dict, flash: str = "", user: str = "") -> str:
         view = params.get("view", "todo") if params.get("view") in VIEWS else "todo"
         q, job_type = params.get("q", ""), params.get("type", "")
         with self.tracker.Session() as s:
             jobs = list(s.scalars(self.jobs_query(view, q, job_type)))
-        types = "".join(f'<option value="{t}" {"selected" if t == job_type else ""}>{t.replace("_", "-")}</option>'
+        types = "".join(f'<option value="{t}" {"selected" if t == job_type else ""}>{t.replace("_", "-") or "all types"}</option>'
                         for t in ("", "full_time", "intern", "contract", "part_time"))
         filters = (f'<form class="filters" method="get"><input type="hidden" name="view" value="{view}">'
                    f'<input name="q" placeholder="title, company or place" value="{_e(q)}">'
@@ -109,17 +172,18 @@ class App:
             sponsor = (f'<span class="ok" title="{_e(j.sponsor_note)}">{j.sponsor_score:.0f}</span>' if j.sponsor_score
                        else '<span class="bad" title="no H-1B filings found">none</span>')
             warn = f' <span class="warn" title="{_e(j.sponsorship_warning)}">&#9888; may not sponsor</span>' if j.sponsorship_warning else ""
-            kind = f' <span class="tag">{_e(j.job_type.replace("_", "-"))}</span>' if j.job_type and j.job_type != "full_time" else ""
-            kit = ' <span class="tag">kit ready</span>' if j.kit_resume_path else ""
+            kind = f'<span class="tag">{_e(j.job_type.replace("_", "-"))}</span>' if j.job_type and j.job_type != "full_time" else ""
             actions = self.decision_buttons(j, view)
+            if j.decision == "shortlisted" and view in ("todo", "shortlisted"):
+                actions = f"<a class='btn primary' href='{_e(j.job_url)}' target='_blank' rel='noopener'>Apply</a> " + actions
             rows.append(
                 f"<tr><td class='num muted'>{i}</td><td class='num'><b>{j.overall_score:.0f}</b></td>"
-                f"<td><a href='/job/{j.id}'>{_e(j.title)}</a>{star}{kind}{kit}{warn}</td><td>{_e(j.company)}</td>"
+                f"<td><a href='/job/{j.id}'>{_e(j.title)}</a>{star}{kind}{self.resume_state(j)}{warn}</td><td>{_e(j.company)}</td>"
                 f"<td class='muted'>{_e(j.location)}</td><td class='muted'>{_ago(j.date_posted)}</td>"
                 f"<td class='num'>{sponsor}</td><td class='num muted'>{j.match_score:.0f}</td><td>{actions}</td></tr>")
-        table = ("<table><tr><th>#</th><th>Score</th><th>Job</th><th>Company</th><th>Location</th><th>Posted</th>"
-                 "<th>H-1B</th><th>Fit</th><th></th></tr>" + "".join(rows) + "</table>") if rows else "<p class='muted'>Nothing here.</p>"
-        return self.page(VIEWS[view], filters + table, view, flash)
+        table = ("<div class='tablewrap'><table><tr><th>#</th><th>Score</th><th>Job</th><th>Company</th><th>Location</th><th>Posted</th>"
+                 "<th>H-1B</th><th>Fit</th><th></th></tr>" + "".join(rows) + "</table></div>") if rows else "<p class='muted'>Nothing here.</p>"
+        return self.page(VIEWS[view], filters + table, view, flash, user)
 
     def decision_buttons(self, j: Job, view: str) -> str:
         back = f"/?view={view}"
@@ -133,41 +197,50 @@ class App:
         out += btn("skipped", "Skip") if j.decision != "skipped" else btn("new", "Restore")
         return out
 
-    def job_page(self, job_id: int, flash: str = "") -> str:
+    def job_page(self, job_id: int, flash: str = "", user: str = "") -> str:
         with self.tracker.Session() as s:
             j = s.get(Job, job_id)
             if j is None:
-                return self.page("Not found", "<p>No such job.</p>")
+                return self.page("Not found", "<p>No such job.</p>", user=user)
             apps = list(s.scalars(select(Application).where(Application.job_id == job_id)))
+        state = self.worker.status.get(j.id, "")
+        busy = state in ("queued", "generating")
         files = ""
         for label, path in (("Tailored resume", j.kit_resume_path), ("Cover note", j.kit_cover_path)):
             if path:
                 files += f"<div>{label}: <a href='/file?path={quote(path)}' target='_blank'>{_e(Path(path).name)}</a></div>"
+        if busy:
+            files += "<div class='muted'>Generating&hellip; refresh this page in a minute.</div>"
+        elif state.startswith("failed"):
+            files += f"<div class='bad'>{_e(state)}</div>"
         warn = (f"<p class='warn'>&#9888; This posting may not sponsor visas: <i>{_e(j.sponsorship_warning)}</i></p>"
                 if j.sponsorship_warning else "")
         if apps:
             a = apps[0]
-            state = f"<p class='ok'>Applied {a.applied_date:%Y-%m-%d} &middot; status: <b>{_e(a.status)}</b></p>"
-            apply_form = ""
+            applied = f"<p class='ok'>Applied {a.applied_date:%Y-%m-%d} &middot; status: <b>{_e(a.status)}</b></p>"
+            apply_btns = ""
         else:
-            state = ""
-            apply_form = (f"<form class='inline' method='post' action='/applied/{j.id}'><button class='primary'>Mark applied</button></form> "
-                          "<span class='muted'>records the kit below as what you sent</span>")
-        kit_form = (f"<form class='inline' method='post' action='/kit/{j.id}'><button>{'Rebuild' if j.kit_resume_path else 'Prepare'} kit</button></form> "
-                    "<span class='muted'>tailored resume + cover note, about a minute</span>")
+            applied = ""
+            apply_btns = (f"<form class='inline' method='post' action='/applied/{j.id}'><button>Mark applied</button></form> "
+                          "<span class='muted'>records the resume and cover note below as what you sent</span>")
+        def post(action, label):
+            disabled = " disabled" if busy else ""
+            return f"<form class='inline' method='post' action='/{action}/{j.id}'><button{disabled}>{label}</button></form> "
+        kit_btns = (post("resume", "Regenerate resume" if j.kit_resume_path else "Generate resume")
+                    + post("cover", "Rewrite cover note" if j.kit_cover_path else "Write cover note"))
         body = (
             f"<div class='card'><h2 style='margin:0 0 4px'>{_e(j.title)}</h2>"
             f"<div><b>{_e(j.company)}</b> &middot; {_e(j.location)} &middot; {_e((j.job_type or '').replace('_', '-'))} "
             f"&middot; posted {_ago(j.date_posted)} &middot; source {_e(j.source)}</div>"
             f"<p>Score <b>{j.overall_score:.0f}</b> (fit {j.match_score:.0f}, H-1B {j.sponsor_score:.0f})<br>"
-            f"<span class='muted'>H-1B: {_e(j.sponsor_note or 'no data')}</span></p>{warn}{state}"
-            f"<p><a href='{_e(j.job_url)}' target='_blank' rel='noopener'><button class='primary' type='button'>Open posting</button></a> "
-            f"{self.decision_buttons(j, 'todo')}</p>"
-            f"<p>{kit_form}</p>{files}<p>{apply_form}</p></div>"
+            f"<span class='muted'>H-1B: {_e(j.sponsor_note or 'no data')}</span></p>{warn}{applied}"
+            f"<div class='row'><a class='btn primary' href='{_e(j.job_url)}' target='_blank' rel='noopener'>Apply</a> "
+            f"{self.decision_buttons(j, 'todo')}</div>"
+            f"<div class='row'>{kit_btns}</div>{files}<div class='row'>{apply_btns}</div></div>"
             f"<div class='card'><pre>{_e(j.description or 'No description from this source.')}</pre></div>")
-        return self.page(j.title, body, "", flash)
+        return self.page(j.title, body, "", flash, user)
 
-    def applications_page(self, flash: str = "") -> str:
+    def applications_page(self, flash: str = "", user: str = "") -> str:
         rows = []
         for a, j in self.tracker.applications():
             opts = "".join(f"<option {'selected' if s == a.status else ''}>{s}</option>" for s in STATUSES)
@@ -177,38 +250,22 @@ class App:
                 f"<tr><td>{a.applied_date:%Y-%m-%d}</td><td><a href='/job/{j.id}'>{_e(j.title)}</a></td><td>{_e(j.company)}</td>"
                 f"<td>{resume}{cover}</td><td><form class='inline' method='post' action='/status/{a.id}'>"
                 f"<select name='status'>{opts}</select> <button>Save</button></form></td></tr>")
-        body = ("<table><tr><th>Applied</th><th>Job</th><th>Company</th><th>What you sent</th><th>Status</th></tr>"
-                + "".join(rows) + "</table>") if rows else "<p class='muted'>No applications yet.</p>"
-        return self.page("Applications", body, "apps", flash)
+        body = ("<div class='tablewrap'><table><tr><th>Applied</th><th>Job</th><th>Company</th><th>What you sent</th><th>Status</th></tr>"
+                + "".join(rows) + "</table></div>") if rows else "<p class='muted'>No applications yet.</p>"
+        return self.page("Applications", body, "apps", flash, user)
 
-    def runs_page(self) -> str:
+    def runs_page(self, user: str = "") -> str:
         rows = []
         for r in self.tracker.recent_runs(30):
             started = r.started if r.started.tzinfo else r.started.replace(tzinfo=timezone.utc)
             problems = "<br>".join(_e(p) for p in (r.problems or "").splitlines()) or "<span class='muted'>none</span>"
             rows.append(f"<tr><td>{started.astimezone():%Y-%m-%d %H:%M}</td><td class='num'>{r.fetched}</td><td class='num'>{r.new}</td>"
                         f"<td class='num'>{r.seen_again}</td><td class='num'>{r.closed}</td><td>{problems}</td></tr>")
-        body = ("<table><tr><th>Started</th><th>Fetched</th><th>New</th><th>Seen again</th><th>Closed</th><th>Problems</th></tr>"
-                + "".join(rows) + "</table>") if rows else "<p class='muted'>No runs yet.</p>"
-        return self.page("Runs", body, "runs")
+        body = ("<div class='tablewrap'><table><tr><th>Started</th><th>Fetched</th><th>New</th><th>Seen again</th><th>Closed</th><th>Problems</th></tr>"
+                + "".join(rows) + "</table></div>") if rows else "<p class='muted'>No runs yet.</p>"
+        return self.page("Runs", body, "runs", user=user)
 
-    # ------------------------------------------------------------------ actions
-    def prepare_kit(self, job_id: int) -> str:
-        from jobhunter.pipeline import prepare_kit
-
-        if not _kit_lock.acquire(blocking=False):
-            return "Another kit is being prepared; try again in a minute."
-        try:
-            resume, cover, warnings = prepare_kit(self.profile, self.tracker, job_id)
-        except Exception as e:  # noqa: BLE001 - show the reason on the page
-            return f"Kit failed: {e}"
-        finally:
-            _kit_lock.release()
-        if resume and cover:
-            check = (" Check: " + "; ".join(warnings)) if warnings else ""
-            return "Kit ready. Review the resume and cover note before sending." + check
-        return "Kit partly failed: " + ("no resume. " if not resume else "") + ("no cover note." if not cover else "")
-
+    # ------------------------------------------------------------------ helpers
     def file_path(self, raw: str) -> Path | None:
         """Only files inside the tailored-resume folder can be opened."""
         try:
@@ -217,70 +274,126 @@ class App:
             return None
         return path if path.is_file() and self.files_root in path.parents else None
 
+    def token_ok(self, header: str) -> bool:
+        return bool(self.api_token) and hmac.compare_digest(header or "", f"Bearer {self.api_token}")
+
+    def db_path(self) -> Path | None:
+        url = str(self.tracker.engine.url)
+        return Path(self.tracker.engine.url.database) if url.startswith("sqlite") and self.tracker.engine.url.database else None
+
 
 def make_handler(app: App, port: int):
-    allowed_origins = {f"http://127.0.0.1:{port}", f"http://localhost:{port}"}
+    local_origins = {f"http://127.0.0.1:{port}", f"http://localhost:{port}"}
 
     class Handler(BaseHTTPRequestHandler):
         def log_message(self, fmt, *args):  # quiet console
             pass
 
-        def send_html(self, text: str, status: int = 200):
-            data = text.encode("utf-8")
+        # ---- responses
+        def send(self, data: bytes, kind: str, status: int = 200, extra: dict | None = None):
             self.send_response(status)
-            self.send_header("Content-Type", "text/html; charset=utf-8")
+            self.send_header("Content-Type", kind)
             self.send_header("Content-Length", str(len(data)))
+            self.send_header("X-Content-Type-Options", "nosniff")
+            for k, v in (extra or {}).items():
+                self.send_header(k, v)
             self.end_headers()
             self.wfile.write(data)
+
+        def send_html(self, text: str, status: int = 200):
+            self.send(text.encode("utf-8"), "text/html; charset=utf-8", status)
+
+        def send_json(self, obj, status: int = 200):
+            self.send(json.dumps(obj).encode("utf-8"), "application/json", status)
 
         def redirect(self, to: str):
             self.send_response(303)
             self.send_header("Location", to)
             self.end_headers()
 
+        # ---- access control
+        def user(self) -> str | None:
+            """Signed-in user's email, '' when running locally without sign-in, None if not allowed."""
+            if not app.allowed_users:
+                return ""
+            name = (self.headers.get("X-MS-CLIENT-PRINCIPAL-NAME") or "").strip().lower()
+            return name if name in app.allowed_users else None
+
+        def require_user(self) -> str | None:
+            user = self.user()
+            if user is None:
+                if self.headers.get("X-MS-CLIENT-PRINCIPAL-NAME"):
+                    self.send_html("Not allowed for this account.", 403)
+                else:
+                    self.redirect("/.auth/login/aad?post_login_redirect_uri=" + quote(self.path))
+            return user
+
+        def same_origin(self) -> bool:
+            origin = self.headers.get("Origin")
+            if not origin:
+                return True
+            host = self.headers.get("Host", "")
+            return origin in local_origins or origin == f"https://{host}"
+
+        def body(self) -> bytes:
+            return self.rfile.read(int(self.headers.get("Content-Length") or 0))
+
+        # ---- routes
         def do_GET(self):
             url = urlparse(self.path)
             params = {k: v[0] for k, v in parse_qs(url.query).items()}
+            if url.path == "/api/backup":
+                return self.api_backup()
+            if url.path == "/healthz":
+                return self.send(b"ok", "text/plain")
+            user = self.require_user()
+            if user is None:
+                return
             parts = url.path.strip("/").split("/")
+            msg = params.get("msg", "")
             if url.path == "/":
-                return self.send_html(app.list_page(params, params.get("msg", "")))
+                return self.send_html(app.list_page(params, msg, user))
             if parts[0] == "job" and len(parts) == 2 and parts[1].isdigit():
-                return self.send_html(app.job_page(int(parts[1]), params.get("msg", "")))
+                return self.send_html(app.job_page(int(parts[1]), msg, user))
             if url.path == "/applications":
-                return self.send_html(app.applications_page(params.get("msg", "")))
+                return self.send_html(app.applications_page(msg, user))
             if url.path == "/runs":
-                return self.send_html(app.runs_page())
+                return self.send_html(app.runs_page(user))
             if url.path == "/file":
                 path = app.file_path(params.get("path", ""))
                 if path is None:
                     return self.send_html("Not found", 404)
-                data = path.read_bytes()
                 kind = "application/pdf" if path.suffix.lower() == ".pdf" else "text/plain; charset=utf-8"
-                self.send_response(200)
-                self.send_header("Content-Type", kind)
-                self.send_header("Content-Length", str(len(data)))
-                self.end_headers()
-                return self.wfile.write(data)
+                return self.send(path.read_bytes(), kind, extra={"Content-Disposition": f'inline; filename="{path.name}"'})
             self.send_html("Not found", 404)
 
         def do_POST(self):
-            origin = self.headers.get("Origin")
-            if origin and origin not in allowed_origins:  # block other websites posting to this page
+            path = urlparse(self.path).path
+            if path == "/api/ingest":
+                return self.api_ingest()
+            if path == "/api/restore":
+                return self.api_restore()
+            if not self.same_origin():  # block other websites posting to this app
                 return self.send_html("Forbidden", 403)
-            length = int(self.headers.get("Content-Length") or 0)
-            form = {k: v[0] for k, v in parse_qs(self.rfile.read(length).decode("utf-8")).items()}
-            parts = urlparse(self.path).path.strip("/").split("/")
+            if self.require_user() is None:
+                return
+            form = {k: v[0] for k, v in parse_qs(self.body().decode("utf-8")).items()}
+            parts = path.strip("/").split("/")
             if len(parts) != 2 or not parts[1].isdigit():
                 return self.send_html("Not found", 404)
             action, item = parts[0], int(parts[1])
             try:
                 if action == "decide":
-                    app.tracker.set_decision(item, form.get("decision", "new"))
+                    decision = form.get("decision", "new")
+                    job = app.tracker.set_decision(item, decision)
+                    if decision == "shortlisted" and not job.kit_resume_path:
+                        app.worker.submit(item, "resume")  # shortlisting generates the resume
                     back = form.get("back", "/")
                     return self.redirect(back if back.startswith("/") else "/")
-                if action == "kit":
-                    msg = app.prepare_kit(item)
-                    return self.redirect(f"/job/{item}?msg={quote(msg)}")
+                if action in ("resume", "cover"):
+                    app.worker.submit(item, action)
+                    note = "Generating the resume" if action == "resume" else "Writing the cover note"
+                    return self.redirect(f"/job/{item}?msg={quote(note + '; refresh in a minute.')}")
                 if action == "applied":
                     app.tracker.log_application(item)
                     return self.redirect(f"/job/{item}?msg={quote('Application recorded.')}")
@@ -291,14 +404,62 @@ def make_handler(app: App, port: int):
                 return self.send_html(app.page("Error", f"<p class='bad'>{_e(e)}</p>"), 400)
             self.send_html("Not found", 404)
 
+        # ---- API (token)
+        def api_ingest(self):
+            from jobhunter.pipeline import Gathered, store
+
+            if not app.token_ok(self.headers.get("Authorization", "")):
+                return self.send_json({"error": "unauthorized"}, 401)
+            try:
+                gathered = Gathered.from_dict(json.loads(self.body()))
+            except (ValueError, TypeError, KeyError) as e:
+                return self.send_json({"error": f"bad payload: {e}"}, 400)
+            summary = store(app.tracker, gathered)
+            self.send_json({"summary": summary.line(), "new": len(summary.new)})
+
+        def api_backup(self):
+            if not app.token_ok(self.headers.get("Authorization", "")):
+                return self.send_json({"error": "unauthorized"}, 401)
+            src = app.db_path()
+            if src is None:
+                return self.send_json({"error": "backup needs a SQLite database"}, 400)
+            with tempfile.TemporaryDirectory() as tmp:
+                copy = Path(tmp) / "backup.db"
+                # closing(): sqlite3's own context manager commits but doesn't close the file.
+                with closing(sqlite3.connect(src)) as s, closing(sqlite3.connect(copy)) as d:
+                    s.backup(d)  # consistent copy even while the app is writing
+                data = copy.read_bytes()
+            self.send(data, "application/octet-stream", extra={"Content-Disposition": 'attachment; filename="jobhunter.db"'})
+
+        def api_restore(self):
+            """Load a database into an app that has no jobs yet (first deployment)."""
+            if not app.token_ok(self.headers.get("Authorization", "")):
+                return self.send_json({"error": "unauthorized"}, 401)
+            dest = app.db_path()
+            with app.tracker.Session() as s:
+                existing = s.query(Job).count()
+            if dest is None or existing:
+                return self.send_json({"error": f"refused: the app already has {existing} jobs"}, 409)
+            with tempfile.TemporaryDirectory() as tmp:
+                upload = Path(tmp) / "upload.db"
+                upload.write_bytes(self.body())
+                with closing(sqlite3.connect(upload)) as s, closing(sqlite3.connect(dest)) as d:
+                    s.backup(d)
+            app.tracker.engine.dispose()
+            app.tracker._add_missing_columns()
+            with app.tracker.Session() as s:
+                self.send_json({"restored_jobs": s.query(Job).count()})
+
     return Handler
 
 
-def serve(profile: Profile, tracker: Tracker, port: int = 8765, open_browser: bool = True) -> None:
+def serve(profile: Profile, tracker: Tracker, host: str = "127.0.0.1", port: int = 8765, open_browser: bool = True) -> None:
     app = App(profile, tracker)
-    server = ThreadingHTTPServer(("127.0.0.1", port), make_handler(app, port))
+    if host != "127.0.0.1" and not app.allowed_users:
+        raise SystemExit("Refusing to listen beyond this PC without JOBHUNTER_ALLOWED_USERS (sign-in) set.")
+    server = ThreadingHTTPServer((host, port), make_handler(app, port))
     url = f"http://127.0.0.1:{port}/"
-    print(f"Review page: {url}  (Ctrl+C to stop)")
+    print(f"Review page: {url if host == '127.0.0.1' else f'http://{host}:{port}/'}  (Ctrl+C to stop)")
     if open_browser:
         threading.Timer(0.5, lambda: webbrowser.open(url)).start()
     try:
