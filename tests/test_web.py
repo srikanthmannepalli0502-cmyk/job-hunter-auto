@@ -102,3 +102,69 @@ def test_backup_and_restore(server, tmp_path):
     # Restore is refused once the app has jobs (it's only for the first deployment).
     r = httpx.post(f"{base}/api/restore", content=backup.content, headers={"Authorization": f"Bearer {TOKEN}"})
     assert r.status_code == 409
+
+
+def test_answers_page_saves_profile_and_answers(server):
+    base, app = server()
+    r = httpx.post(f"{base}/answers/save", data={"f_email": "me@example.com", "f_phone": ""}, follow_redirects=False)
+    assert r.status_code == 303
+    httpx.post(f"{base}/answers/add", data={"question": "Why us?", "answer": "Because."})
+    fields = {a.field: a.answer for a in app.tracker.answers() if a.field}
+    assert fields == {"email": "me@example.com"}  # empty values are not saved
+    free = [a for a in app.tracker.answers() if not a.field]
+    assert [(a.question, a.answer) for a in free] == [("Why us?", "Because.")]
+    httpx.post(f"{base}/answers/delete/{free[0].id}")
+    assert [a for a in app.tracker.answers() if not a.field] == []
+    assert httpx.get(f"{base}/answers").status_code == 200
+
+
+def test_extension_api(server, tmp_path):
+    base, app = server()
+    ingest(base, ["Acme"])
+    job = app.tracker.top_jobs(limit=5)[0]
+    assert httpx.get(f"{base}/api/x/context?url=x").status_code == 401
+    key = app.extension_key()
+    h = {"X-Extension-Key": key}
+    assert httpx.get(f"{base}/api/x/context?url=x", headers={"X-Extension-Key": "wrong"}).status_code == 401
+
+    app.tracker.save_answer("Email", "me@example.com", field="email")
+    ctx = httpx.get(f"{base}/api/x/context", params={"url": job.job_url}, headers=h).json()
+    assert ctx["job"]["id"] == job.id and ctx["job"]["has_resume"] is False
+    assert [f["key"] for f in ctx["fields"]] == ["email"]
+    assert httpx.get(f"{base}/api/x/context", params={"url": "https://other.example/x"}, headers=h).json()["job"] is None
+
+    # Resume download: 404 until there is one, then the file with its name.
+    assert httpx.get(f"{base}/api/x/resume/{job.id}", headers=h).status_code == 404
+    out = tmp_path / "tailored"
+    out.mkdir(exist_ok=True)
+    pdf = out / "acme.pdf"
+    pdf.write_bytes(b"%PDF-1.4 test")
+    app.tracker.set_kit(job.id, resume_path=str(pdf))
+    r = httpx.get(f"{base}/api/x/resume/{job.id}", headers=h)
+    assert r.status_code == 200 and r.content == b"%PDF-1.4 test" and r.headers["X-Filename"] == "acme.pdf"
+
+    # Saving answers skips sensitive questions.
+    items = [{"question": "Years of SQL?", "answer": "2"}, {"question": "Social Security Number", "answer": "123"}]
+    assert httpx.post(f"{base}/api/x/answers", json={"items": items}, headers=h).json() == {"saved": 1}
+    assert [a.question for a in app.tracker.answers() if not a.field] == ["Years of SQL?"]
+
+    r = httpx.post(f"{base}/api/x/applied/{job.id}", json={}, headers=h).json()
+    assert r["resume"] == str(pdf) and app.tracker.applications()[0][1].id == job.id
+
+
+def test_extension_assist_uses_the_job(server, monkeypatch):
+    seen = {}
+
+    def fake_assist(llm, question, resume, answers, **job):
+        seen.update(job, question=question)
+        return "Say yes."
+
+    monkeypatch.setattr("jobhunter.assist.assist", fake_assist)
+    monkeypatch.setattr("jobhunter.llm.LLMClient", lambda: None)
+    base, app = server()
+    ingest(base, ["Acme"])
+    job = app.tracker.top_jobs(limit=5)[0]
+    h = {"X-Extension-Key": app.extension_key()}
+    r = httpx.post(f"{base}/api/x/assist", json={"job_id": job.id, "question": "Relocate?", "page_questions": ["Q1"]}, headers=h)
+    assert r.json() == {"answer": "Say yes."}
+    assert seen["company"] == "Acme" and seen["page_questions"] == ["Q1"] and seen["question"] == "Relocate?"

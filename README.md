@@ -19,9 +19,9 @@ flowchart LR
     F --> S[Fit score 0-100<br/>skills, title, location]
     S --> H[H-1B sponsor score<br/>DOL + USCIS data]
     H --> DB[(SQLite tracker)]
-    DB --> T[Tailor resume<br/>Llama 3.3 70B via Groq]
+    DB --> T[Tailor resume<br/>Azure OpenAI or Groq]
     T --> P[One-page PDF<br/>fit check + auto-trim]
-    DB --> O[Open posting in browser]
+    DB --> O[Apply with the Chrome side panel<br/>fill, attach, ask]
     O --> L[Log application<br/>track status]
 ```
 
@@ -119,32 +119,55 @@ pip install -r requirements.txt
 
 ### The daily routine
 
-1. **Gather (automatic):** a Windows scheduled task runs `jobhunter run` at 10:00 and 18:00. Each
-   run reads every source, filters and scores the postings, stores new jobs, refreshes the
-   `last seen` date of jobs found again (so nothing is duplicated) and marks jobs that haven't
-   been seen for 3 days as closed. Set it up once:
+1. **Gather (automatic):** `jobhunter run` reads every source at 10:00 and 18:00, filters and
+   scores the postings, stores new jobs, refreshes the `last seen` date of jobs found again (so
+   nothing is duplicated) and marks jobs not seen for 3 days as closed. Run it either
+   - **in the cloud** (works with your PC off): see [Hosting](#hosting), or
+   - **on Windows**: `powershell -ExecutionPolicy Bypass -File scripts\install_schedule.ps1`
+     (missed runs happen when the PC wakes; output in `logs\scheduled.log`).
 
-   ```bash
-   powershell -ExecutionPolicy Bypass -File scripts\install_schedule.ps1
-   ```
+2. **Review (you):** the review page lists the open jobs ranked by fit + H-1B sponsorship
+   (`python -m jobhunter review` locally, or your hosted address). Shortlist or skip each one;
+   skipped jobs stay hidden even when later runs find them again.
 
-   If the PC is off or asleep at a run time, Windows runs it as soon as it's back.
-   Output goes to `logs\scheduled.log`; `python -m jobhunter runs` lists recent runs and any
-   source that failed.
+3. **Resume (automatic):** shortlisting a job writes a tailored one-page resume from your master
+   resume. A cover note is written only when you click *Write cover note*.
 
-2. **Review (you):** `python -m jobhunter review` opens a page in your browser (served only to
-   this PC at http://127.0.0.1:8765) with the open jobs ranked by fit + H-1B sponsorship.
-   Shortlist or skip each one; skipped jobs stay hidden even when later runs find them again.
+4. **Apply (you, with help):** *Apply* opens the posting. With the [Chrome extension](#chrome-extension)
+   the side panel fills the form from your saved answers, attaches the tailored resume, saves new
+   answers you type for next time, and answers questions about this application. You check
+   everything and submit, then click *I submitted this application*; the app records which
+   resume and cover note you sent.
 
-3. **Prepare (one click):** on a job's page, *Prepare kit* writes a tailored one-page resume
-   (from your master resume) and a short cover note to `resumes/tailored/`.
+Job Hunter never submits applications for you, and never fills passwords, SSN, passport, bank or
+date-of-birth fields.
 
-4. **Apply (you):** *Open posting*, apply on the company's site, then *Mark applied*. The
-   application records which resume and cover note you sent; update its status later on the
-   *Applications* tab.
+### Hosting
 
-Job Hunter never submits applications for you: career sites need accounts, screening
-questions and sometimes assessments, and only you should send anything in your name.
+The review app can run on a small web host so you can use it from any browser, with the twice-daily
+run in GitHub Actions:
+
+- **App:** `python -m jobhunter review --host 0.0.0.0 --port 8000 --no-browser`. Off localhost it
+  refuses to start unless `JOBHUNTER_ALLOWED_USERS` lists the emails allowed in; put a sign-in
+  proxy in front (e.g. Azure App Service authentication), which passes the signed-in email in
+  `X-MS-CLIENT-PRINCIPAL-NAME`. Set `DATABASE_URL`, `JOBHUNTER_OUTPUT_DIR`, `JOBHUNTER_PROFILE`
+  and `JOBHUNTER_API_TOKEN`.
+- **Runs:** a scheduled workflow runs `python -m jobhunter run --log --push https://your-app`,
+  which sends the results to the app's `/api/ingest` (bearer token), then saves `/api/backup`.
+- Keep `profile.toml`, the master resume and the database backup in a **private** repository;
+  this repository holds only code.
+
+### Chrome extension
+
+1. Open `chrome://extensions`, turn on *Developer mode*, click *Load unpacked* and choose the
+   `extension/` folder.
+2. In the app, open *Profile & answers*: save your basics (only saved values are ever filled)
+   and copy the extension key.
+3. Click the Job Hunter icon, open *settings*, enter the app address and the key.
+
+On an application page, open the side panel: it shows which saved job the page belongs to and offers
+*Fill this page*, *Attach resume*, *Save my answers from this page*, *Ask* and *I submitted this
+application*. It fills only empty fields and works inside embedded application frames.
 
 ### Commands
 
@@ -167,12 +190,12 @@ python -m jobhunter sponsor "Capital One"   # H-1B sponsorship of a company
 
 | What | Where |
 |---|---|
-| Jobs, scores, your decisions, applications (with the resume and cover note sent), runs | `jobhunter.db` (SQLite) |
+| Jobs, scores, your decisions, applications (with the resume and cover note sent), runs, saved answers | `jobhunter.db` (SQLite) |
 | Tailored resumes and cover notes | `resumes/tailored/` |
 | Your master resume and profile | `resumes/master_resume.txt`, `profile.toml` |
 | Run logs | `logs/` |
 
-All of these are gitignored and stay on your PC.
+All of these are gitignored. When hosted, they live on the app host and in your private repository.
 
 ### Resume quality checks
 
@@ -195,7 +218,9 @@ jobhunter/
 ├── tracker.py          # SQLAlchemy models + job/application store
 ├── llm.py              # Azure OpenAI (Entra ID) or Groq client
 ├── pipeline.py         # run_search and prepare_kit, shared by the CLI, schedule and review page
-├── web.py              # local review page
+├── web.py              # review app + extension API
+├── answers.py          # profile fields for forms, sensitive-field guard
+├── assist.py           # "Ask" answers for an application
 ├── sources/
 │   ├── base.py         # JobSource interface, dedupe, exclusions
 │   ├── adzuna.py       # Adzuna API
@@ -206,6 +231,7 @@ jobhunter/
     ├── pdf.py          # ATS-friendly PDF rendering + page-fit check
     ├── tailor.py       # prompt, quality checks, one-page fitting
     └── cover.py        # cover note
+extension/              # Chrome side panel: fill, attach, save answers, ask
 scripts/                # run_scheduled.cmd + install_schedule.ps1 (Windows Task Scheduler)
 tests/                  # pytest suite (APIs mocked, LLM faked); runs in GitHub Actions
 ```
@@ -223,8 +249,9 @@ The tests mock the job APIs and the LLM, so they need no keys or network access.
 
 - Job data comes only from official APIs, used within their terms. Remotive asks API users to
   link back to postings and credit Remotive as the source; please do.
-- No automated logins, scraping or auto-submission. Applying stays a human decision.
-- Groq's free tier allows a limited number of requests per day; tailoring retries on rate limits.
+- No automated logins or auto-submission. Applying stays a human decision. Career boards are
+  read through their public job APIs, slowly.
+- LLM providers limit requests; tailoring retries on rate limits.
 
 ## License
 

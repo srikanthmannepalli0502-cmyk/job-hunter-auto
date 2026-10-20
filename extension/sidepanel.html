@@ -1,0 +1,49 @@
+<!doctype html>
+<html>
+<head>
+  <meta charset="utf-8">
+  <title>Job Hunter</title>
+  <link rel="stylesheet" href="panel.css">
+</head>
+<body>
+  <main>
+    <h2>Job Hunter</h2>
+    <div id="setup" class="card" hidden>
+      Enter your app address and key in <a href="#" id="openOptions">settings</a> first.
+    </div>
+
+    <div id="job" class="card">
+      <div id="jobInfo" class="muted">Checking this page&hellip;</div>
+    </div>
+
+    <div class="card">
+      <button id="fill" class="primary">Fill this page</button>
+      <button id="attachResume">Attach resume</button>
+      <button id="attachCover">Attach cover note</button>
+      <div id="fillResult" class="muted"></div>
+    </div>
+
+    <div class="card">
+      <button id="collect">Save my answers from this page</button>
+      <div id="collectResult"></div>
+    </div>
+
+    <div class="card">
+      <h3 style="margin-top:0">Ask about this application</h3>
+      <textarea id="question" placeholder="e.g. How should I answer 'Why do you want to work here?'"></textarea>
+      <button id="ask" class="primary">Ask</button>
+      <span class="muted">uses the job, your resume, your saved answers and this page's questions</span>
+      <div id="answer"></div>
+    </div>
+
+    <div class="card">
+      <button id="applied">I submitted this application</button>
+      <a href="#" id="openApp">Open Job Hunter</a>
+      <div id="appliedResult" class="muted"></div>
+    </div>
+    <p class="muted">Job Hunter never submits forms for you. Check every filled field before you submit.</p>
+  </main>
+  <script src="api.js"></script>
+  <script src="sidepanel.js"></script>
+</body>
+</html>

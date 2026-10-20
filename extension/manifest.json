@@ -1,0 +1,12 @@
+{
+  "manifest_version": 3,
+  "name": "Job Hunter",
+  "version": "1.0.0",
+  "description": "Fill job applications from your Job Hunter profile, attach the tailored resume, save new answers and ask an assistant about the job.",
+  "permissions": ["storage", "sidePanel", "scripting", "activeTab", "tabs"],
+  "host_permissions": ["<all_urls>"],
+  "background": { "service_worker": "background.js" },
+  "side_panel": { "default_path": "sidepanel.html" },
+  "options_page": "options.html",
+  "action": { "default_title": "Job Hunter" }
+}

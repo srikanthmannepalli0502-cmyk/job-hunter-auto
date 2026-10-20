@@ -85,6 +85,26 @@ class Run(Base):
     problems: Mapped[str | None] = mapped_column(Text)
 
 
+class Answer(Base):
+    """Your answers for application forms: profile basics (field set, e.g. 'email') and answers
+    to questions you've seen before (field empty), reused by the browser extension."""
+
+    __tablename__ = "answers"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    field: Mapped[str | None] = mapped_column(String(50), index=True)
+    question: Mapped[str] = mapped_column(Text)
+    answer: Mapped[str] = mapped_column(Text)
+    updated: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_now)
+
+
+class Setting(Base):
+    __tablename__ = "settings"
+
+    key: Mapped[str] = mapped_column(String(50), primary_key=True)
+    value: Mapped[str] = mapped_column(Text)
+
+
 # Columns added after the first release, so older databases can be upgraded in place.
 _ADDED_COLUMNS = {
     "jobs": {
@@ -257,6 +277,49 @@ class Tracker:
             row.finished = _now()
             s.commit()
             return row
+
+    # ---- answers for application forms
+    def answers(self) -> list[Answer]:
+        with self.Session() as s:
+            return list(s.scalars(select(Answer).order_by(Answer.field.is_(None), Answer.field, Answer.question)))
+
+    def save_answer(self, question: str, answer: str, field: str = "") -> Answer:
+        """Insert or update (same field, or same question text for free-form answers)."""
+        question, answer, field = question.strip(), answer.strip(), (field or "").strip()
+        if not question or not answer:
+            raise ValueError("question and answer are required")
+        with self.Session() as s:
+            q = select(Answer).where(Answer.field == field) if field else \
+                select(Answer).where(Answer.field.is_(None), Answer.question == question)
+            row = s.scalars(q).first()
+            if row is None:
+                row = Answer(field=field or None, question=question, answer=answer)
+                s.add(row)
+            else:
+                row.question, row.answer, row.updated = question, answer, _now()
+            s.commit()
+            return row
+
+    def delete_answer(self, answer_id: int) -> None:
+        with self.Session() as s:
+            row = s.get(Answer, answer_id)
+            if row is not None:
+                s.delete(row)
+                s.commit()
+
+    def setting(self, key: str, default: str = "") -> str:
+        with self.Session() as s:
+            row = s.get(Setting, key)
+            return row.value if row else default
+
+    def set_setting(self, key: str, value: str) -> None:
+        with self.Session() as s:
+            row = s.get(Setting, key)
+            if row is None:
+                s.add(Setting(key=key, value=value))
+            else:
+                row.value = value
+            s.commit()
 
     def recent_runs(self, limit: int = 10) -> list[Run]:
         with self.Session() as s:

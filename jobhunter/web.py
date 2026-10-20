@@ -124,6 +124,7 @@ class App:
         nav = "".join(f'<a href="/?view={k}" class="{"on" if k == view else ""}">{v}</a>' for k, v in VIEWS.items())
         nav += f'<a href="/applications" class="{"on" if view == "apps" else ""}">Applications</a>'
         nav += f'<a href="/runs" class="{"on" if view == "runs" else ""}">Runs</a>'
+        nav += f'<a href="/answers" class="{"on" if view == "answers" else ""}">Profile &amp; answers</a>'
         who = f'<span class="who">{_e(user)}</span>' if user else ""
         flash_html = f'<div class="flash">{_e(flash)}</div>' if flash else ""
         return (f"<!doctype html><html><head><meta charset='utf-8'><meta name='viewport' content='width=device-width,initial-scale=1'>"
@@ -265,6 +266,84 @@ class App:
                 + "".join(rows) + "</table></div>") if rows else "<p class='muted'>No runs yet.</p>"
         return self.page("Runs", body, "runs", user=user)
 
+    # ------------------------------------------------------------------ profile & answers
+    def resume_text(self) -> str:
+        from jobhunter.resume.parser import parse_resume
+
+        return parse_resume(self.profile.base_resume) or ""
+
+    def field_values(self) -> dict[str, str]:
+        from jobhunter.answers import defaults_from_profile
+
+        values = defaults_from_profile(self.profile, self.resume_text())
+        values.update({a.field: a.answer for a in self.tracker.answers() if a.field})
+        return values
+
+    def extension_key(self, regenerate: bool = False) -> str:
+        import secrets
+
+        key = "" if regenerate else self.tracker.setting("extension_key")
+        if not key:
+            key = secrets.token_urlsafe(24)
+            self.tracker.set_setting("extension_key", key)
+        return key
+
+    def answers_page(self, flash: str = "", user: str = "", show_key: bool = False) -> str:
+        from jobhunter.answers import FIELDS
+
+        values = self.field_values()
+        saved = {a.field for a in self.tracker.answers() if a.field}
+        rows = "".join(
+            f"<tr><td><label for='f_{k}'>{_e(label)}</label>{'' if k in saved else ' <span class=tag>not saved yet</span>'}</td>"
+            f"<td><input id='f_{k}' name='f_{k}' value='{_e(values.get(k, ''))}' style='width:100%'></td></tr>"
+            for k, label, _ in FIELDS)
+        basics = (f"<form method='post' action='/answers/save'><div class='tablewrap'><table>{rows}</table></div>"
+                  "<p><button class='primary'>Save profile</button> <span class='muted'>Only saved values are used "
+                  "to fill forms. Leave a field empty to never fill it.</span></p></form>")
+        free = "".join(
+            f"<tr><td>{_e(a.question)}</td><td><pre>{_e(a.answer)}</pre></td><td class='muted'>{a.updated:%Y-%m-%d}</td>"
+            f"<td><form class='inline' method='post' action='/answers/delete/{a.id}'><button>Delete</button></form></td></tr>"
+            for a in self.tracker.answers() if not a.field)
+        free_html = ("<div class='tablewrap'><table><tr><th>Question</th><th>Your answer</th><th>Saved</th><th></th></tr>"
+                     f"{free}</table></div>") if free else "<p class='muted'>None yet: the extension offers to save the answers you type on application forms.</p>"
+        add = ("<form method='post' action='/answers/add' class='row'><input name='question' placeholder='Question' style='flex:1;min-width:200px'>"
+               "<input name='answer' placeholder='Your answer' style='flex:2;min-width:200px'><button>Add</button></form>")
+        key = self.extension_key() if show_key else ""
+        key_html = (f"<p>Extension key: <code>{_e(key)}</code></p>" if key else
+                    "<p><a class='btn' href='/answers?key=1'>Show extension key</a></p>")
+        ext = (f"<div class='card'><h3 style='margin-top:0'>Chrome extension</h3>{key_html}"
+               "<p class='muted'>Paste the app address and this key into the extension's settings. Regenerate it if you "
+               "think someone else has seen it (the old key stops working).</p>"
+               "<form method='post' action='/extension/regenerate'><button>Regenerate key</button></form></div>")
+        body = (f"<div class='card'><h3 style='margin-top:0'>Profile</h3>{basics}</div>"
+                f"<div class='card'><h3 style='margin-top:0'>Saved answers</h3>{free_html}{add}</div>{ext}")
+        return self.page("Profile & answers", body, "answers", flash, user)
+
+    def match_job(self, url: str, title: str = "") -> Job | None:
+        """The job whose posting this page belongs to: same site and path (or requisition id)."""
+        import re as _re
+
+        page = urlparse(url)
+        if not page.netloc:
+            return None
+        with self.tracker.Session() as s:
+            candidates = list(s.scalars(select(Job).where(Job.job_url.ilike(f"%{page.netloc}%"))))
+        best, best_score = None, 0
+        for j in candidates:
+            posting = urlparse(j.job_url or "")
+            score = 0
+            if posting.path and page.path.startswith(posting.path.rstrip("/")):
+                score = 3
+            else:
+                ids = set(_re.findall(r"[A-Z]{0,4}\d{5,}|[0-9a-f]{8}-[0-9a-f-]{27}", f"{posting.path}?{posting.query}"))
+                if ids and any(i in url for i in ids):
+                    score = 2
+            if score and j.decision == "shortlisted":
+                score += 1
+            if score > best_score:
+                best, best_score = j, score
+        return best
+
     # ------------------------------------------------------------------ helpers
     def file_path(self, raw: str) -> Path | None:
         """Only files inside the tailored-resume folder can be opened."""
@@ -344,6 +423,8 @@ def make_handler(app: App, port: int):
             params = {k: v[0] for k, v in parse_qs(url.query).items()}
             if url.path == "/api/backup":
                 return self.api_backup()
+            if url.path.startswith("/api/x/"):
+                return self.api_extension("GET", url.path, params)
             if url.path == "/healthz":
                 return self.send(b"ok", "text/plain")
             user = self.require_user()
@@ -359,6 +440,8 @@ def make_handler(app: App, port: int):
                 return self.send_html(app.applications_page(msg, user))
             if url.path == "/runs":
                 return self.send_html(app.runs_page(user))
+            if url.path == "/answers":
+                return self.send_html(app.answers_page(msg, user, show_key=params.get("key") == "1"))
             if url.path == "/file":
                 path = app.file_path(params.get("path", ""))
                 if path is None:
@@ -373,12 +456,34 @@ def make_handler(app: App, port: int):
                 return self.api_ingest()
             if path == "/api/restore":
                 return self.api_restore()
+            if path.startswith("/api/x/"):
+                return self.api_extension("POST", path, {})
             if not self.same_origin():  # block other websites posting to this app
                 return self.send_html("Forbidden", 403)
             if self.require_user() is None:
                 return
             form = {k: v[0] for k, v in parse_qs(self.body().decode("utf-8")).items()}
+            if path == "/answers/save":
+                from jobhunter.answers import FIELDS
+
+                for key, label, _ in FIELDS:
+                    value = form.get(f"f_{key}", "").strip()
+                    if value:
+                        app.tracker.save_answer(label, value, field=key)
+                return self.redirect("/answers?msg=" + quote("Profile saved."))
+            if path == "/answers/add":
+                try:
+                    app.tracker.save_answer(form.get("question", ""), form.get("answer", ""))
+                except ValueError as e:
+                    return self.redirect("/answers?msg=" + quote(str(e)))
+                return self.redirect("/answers?msg=" + quote("Answer saved."))
+            if path == "/extension/regenerate":
+                app.extension_key(regenerate=True)
+                return self.redirect("/answers?key=1&msg=" + quote("New key created; update it in the extension."))
             parts = path.strip("/").split("/")
+            if len(parts) == 3 and parts[:2] == ["answers", "delete"] and parts[2].isdigit():
+                app.tracker.delete_answer(int(parts[2]))
+                return self.redirect("/answers?msg=" + quote("Answer deleted."))
             if len(parts) != 2 or not parts[1].isdigit():
                 return self.send_html("Not found", 404)
             action, item = parts[0], int(parts[1])
@@ -403,6 +508,70 @@ def make_handler(app: App, port: int):
             except ValueError as e:
                 return self.send_html(app.page("Error", f"<p class='bad'>{_e(e)}</p>"), 400)
             self.send_html("Not found", 404)
+
+        # ---- API for the Chrome extension (X-Extension-Key)
+        def api_extension(self, method: str, path: str, params: dict):
+            from jobhunter.answers import FIELDS, SENSITIVE
+
+            key = app.tracker.setting("extension_key")
+            if not key or not hmac.compare_digest(self.headers.get("X-Extension-Key", ""), key):
+                return self.send_json({"error": "unauthorized: check the extension key"}, 401)
+            parts = path.strip("/").split("/")[2:]  # after api/x
+            data = {}
+            if method == "POST":
+                try:
+                    data = json.loads(self.body() or b"{}")
+                except ValueError:
+                    return self.send_json({"error": "bad JSON"}, 400)
+            try:
+                if method == "GET" and parts == ["context"]:
+                    job = app.match_job(params.get("url", ""), params.get("title", ""))
+                    values = app.field_values()
+                    saved = {a.field for a in app.tracker.answers() if a.field}
+                    return self.send_json({
+                        "job": None if job is None else {
+                            "id": job.id, "title": job.title, "company": job.company, "url": job.job_url,
+                            "decision": job.decision, "has_resume": bool(job.kit_resume_path),
+                            "has_cover": bool(job.kit_cover_path)},
+                        "fields": [{"key": k, "label": label, "keywords": kw, "value": values[k]}
+                                   for k, label, kw in FIELDS if k in saved and values.get(k)],
+                        "answers": [{"question": a.question, "answer": a.answer}
+                                    for a in app.tracker.answers() if not a.field],
+                        "sensitive": SENSITIVE.pattern,
+                    })
+                if method == "GET" and len(parts) == 2 and parts[0] in ("resume", "cover") and parts[1].isdigit():
+                    job = app.tracker.get_job(int(parts[1]))
+                    raw = (job.kit_resume_path if parts[0] == "resume" else job.kit_cover_path) if job else None
+                    path_ok = app.file_path(raw or "")
+                    if path_ok is None:
+                        return self.send_json({"error": f"no {parts[0]} for this job yet"}, 404)
+                    kind = "application/pdf" if path_ok.suffix.lower() == ".pdf" else "text/plain; charset=utf-8"
+                    return self.send(path_ok.read_bytes(), kind, extra={"X-Filename": path_ok.name})
+                if method == "POST" and parts == ["answers"]:
+                    saved = 0
+                    for item in data.get("items", [])[:100]:
+                        q, a = str(item.get("question", "")), str(item.get("answer", ""))
+                        if q.strip() and a.strip() and not SENSITIVE.search(q):
+                            app.tracker.save_answer(q[:500], a[:5000])
+                            saved += 1
+                    return self.send_json({"saved": saved})
+                if method == "POST" and parts == ["assist"]:
+                    from jobhunter.assist import assist
+                    from jobhunter.llm import LLMClient
+
+                    job = app.tracker.get_job(int(data["job_id"])) if data.get("job_id") else None
+                    qa = [(a.question, a.answer) for a in app.tracker.answers()]
+                    answer = assist(LLMClient(), str(data.get("question", "")), app.resume_text(), qa,
+                                    title=job.title if job else "", company=job.company if job else "",
+                                    description=job.description if job else "",
+                                    page_questions=[str(q) for q in data.get("page_questions", [])])
+                    return self.send_json({"answer": answer})
+                if method == "POST" and len(parts) == 2 and parts[0] == "applied" and parts[1].isdigit():
+                    a = app.tracker.log_application(int(parts[1]))
+                    return self.send_json({"application_id": a.id, "resume": a.resume_path, "cover": a.cover_note_path})
+            except (ValueError, KeyError) as e:
+                return self.send_json({"error": str(e)}, 400)
+            self.send_json({"error": "not found"}, 404)
 
         # ---- API (token)
         def api_ingest(self):
