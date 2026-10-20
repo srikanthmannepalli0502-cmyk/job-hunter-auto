@@ -216,3 +216,11 @@ def test_workday_source():
         ("Data Analyst", "workday", "SQL", "full_time")]
     # Only the matching, recent posting's detail page was requested.
     assert sum("/job/" in u for u in seen) == 1
+
+
+def test_too_many_requests_is_retried():
+    replies = [httpx.Response(429, headers={"Retry-After": "1"}), httpx.Response(200, json=GREENHOUSE_JOBS)]
+    client = httpx.Client(transport=httpx.MockTransport(lambda request: replies.pop(0)))
+    src = CompanyBoardsSource([Board("ACME", "Acme Inc", "greenhouse", "acme")], ["data analyst"], delay=0, client=client)
+    jobs = src.fetch(SearchConfig(max_days_old=14, job_types=["full_time"]))
+    assert [j.job_url for j in jobs] == ["https://gh/1"] and not src.failures

@@ -164,10 +164,19 @@ class CompanyBoardsSource(JobSource):
             time.sleep(self.retry_pause)
             return list(fetch(board, search, since))
 
-    def _get(self, url: str, **params):
-        resp = self.client.get(url, params=params)
+    def _request(self, method: str, url: str, **kwargs) -> httpx.Response:
+        """A request that waits and tries again (twice) when the site says we're going too fast."""
+        for attempt in range(3):
+            resp = self.client.request(method, url, **kwargs)
+            if resp.status_code != 429 or attempt == 2:
+                break
+            wait = resp.headers.get("Retry-After", "")
+            time.sleep(min(float(wait) if wait.isdigit() else 20.0, 60.0) if self.retry_pause else 0)
         resp.raise_for_status()
-        return resp.json()
+        return resp
+
+    def _get(self, url: str, **params):
+        return self._request("GET", url, params=params).json()
 
     def _fetch_greenhouse(self, b: Board, search: SearchConfig, since: datetime):
         data = self._get(GREENHOUSE.format(slug=b.slug) + "/jobs", content="true")
@@ -226,9 +235,7 @@ class CompanyBoardsSource(JobSource):
         for query in search.all_queries:
             for page in range(self.workday_max_pages):
                 body = {"appliedFacets": {}, "limit": 20, "offset": page * 20, "searchText": query}
-                resp = self.client.post(site.api + "/jobs", json=body)
-                resp.raise_for_status()
-                data = resp.json()
+                data = self._request("POST", site.api + "/jobs", json=body).json()
                 postings = data.get("jobPostings") or []
                 for p in postings:
                     path = p.get("externalPath", "")
@@ -248,9 +255,7 @@ class CompanyBoardsSource(JobSource):
                 time.sleep(self.delay)
 
     def _workday_detail(self, b: Board, site: "WorkdaySite", p: dict):
-        resp = self.client.get(site.api + p["externalPath"])
-        resp.raise_for_status()
-        info = resp.json().get("jobPostingInfo", {})
+        info = self._request("GET", site.api + p["externalPath"]).json().get("jobPostingInfo", {})
         title = (info.get("title") or p.get("title", "")).strip()
         country = (info.get("country") or {}).get("descriptor", "")
         start = info.get("startDate")
