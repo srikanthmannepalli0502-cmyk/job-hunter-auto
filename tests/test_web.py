@@ -59,7 +59,9 @@ def test_ingest_needs_the_token(server):
 def test_hosted_pages_need_sign_in(server):
     base, _ = server(allowed_users="me@example.com")
     r = httpx.get(f"{base}/", follow_redirects=False)
-    assert r.status_code == 303 and r.headers["location"].startswith("/.auth/login/aad")
+    assert r.status_code == 303 and r.headers["location"] == "/login?next=/"
+    login = httpx.get(f"{base}/login?next=/runs").text
+    assert "/.auth/login/google?post_login_redirect_uri=/runs" in login and "/.auth/login/aad" in login
     assert httpx.get(f"{base}/", headers={"X-MS-CLIENT-PRINCIPAL-NAME": "other@example.com"}).status_code == 403
     ok = httpx.get(f"{base}/", headers={"X-MS-CLIENT-PRINCIPAL-NAME": "Me@Example.com"})
     assert ok.status_code == 200 and "me@example.com" in ok.text
@@ -168,3 +170,18 @@ def test_extension_assist_uses_the_job(server, monkeypatch):
     r = httpx.post(f"{base}/api/x/assist", json={"job_id": job.id, "question": "Relocate?", "page_questions": ["Q1"]}, headers=h)
     assert r.json() == {"answer": "Say yes."}
     assert seen["company"] == "Acme" and seen["page_questions"] == ["Q1"] and seen["question"] == "Relocate?"
+
+
+def test_google_sign_in_is_matched_by_email_claim(server):
+    import base64
+
+    base, _ = server(allowed_users="me@gmail.com, me@example.com")
+    principal = {"auth_typ": "google", "claims": [{"typ": "name", "val": "Me"},
+                 {"typ": "http://schemas.xmlsoap.org/ws/2005/05/identity/claims/emailaddress", "val": "Me@Gmail.com"}]}
+    headers = {"X-MS-CLIENT-PRINCIPAL-NAME": "Me",
+               "X-MS-CLIENT-PRINCIPAL": base64.b64encode(json.dumps(principal).encode()).decode()}
+    r = httpx.get(f"{base}/", headers=headers)
+    assert r.status_code == 200 and "me@gmail.com" in r.text
+    principal["claims"][1]["val"] = "someone@gmail.com"
+    headers["X-MS-CLIENT-PRINCIPAL"] = base64.b64encode(json.dumps(principal).encode()).decode()
+    assert httpx.get(f"{base}/", headers=headers).status_code == 403

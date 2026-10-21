@@ -13,6 +13,7 @@ API (Bearer JOBHUNTER_API_TOKEN): POST /api/ingest (a gathered run), GET /api/ba
 database), POST /api/restore (load a database into an empty app).
 """
 
+import base64
 import hmac
 import html
 import json
@@ -361,6 +362,35 @@ class App:
         return Path(self.tracker.engine.url.database) if url.startswith("sqlite") and self.tracker.engine.url.database else None
 
 
+def signed_in_emails(headers) -> list[str]:
+    """Emails of the signed-in user, from the sign-in proxy's headers (Microsoft or Google)."""
+    emails = [(headers.get("X-MS-CLIENT-PRINCIPAL-NAME") or "").strip().lower()]
+    raw = headers.get("X-MS-CLIENT-PRINCIPAL")
+    if raw:
+        try:
+            claims = json.loads(base64.b64decode(raw)).get("claims", [])
+        except ValueError:
+            claims = []
+        emails += [str(c.get("val", "")).strip().lower() for c in claims
+                   if c.get("typ") in _EMAIL_CLAIMS]
+    return [e for e in emails if e]
+
+
+_EMAIL_CLAIMS = {"email", "preferred_username", "upn",
+                 "http://schemas.xmlsoap.org/ws/2005/05/identity/claims/emailaddress"}
+
+
+def login_page(next_path: str) -> str:
+    to = quote(next_path if next_path.startswith("/") and not next_path.startswith("//") else "/")
+    return (
+        "<!doctype html><meta charset='utf-8'><meta name='viewport' content='width=device-width'>"
+        "<title>Sign in</title><body style='font:15px system-ui;max-width:360px;margin:15vh auto;padding:0 16px'>"
+        "<h2>Job Hunter</h2>"
+        f"<p><a href='/.auth/login/google?post_login_redirect_uri={to}'>Sign in with Google</a></p>"
+        f"<p><a href='/.auth/login/aad?post_login_redirect_uri={to}'>Sign in with Microsoft</a></p></body>"
+    )
+
+
 def make_handler(app: App, port: int):
     local_origins = {f"http://127.0.0.1:{port}", f"http://localhost:{port}"}
 
@@ -370,6 +400,8 @@ def make_handler(app: App, port: int):
 
         # ---- responses
         def send(self, data: bytes, kind: str, status: int = 200, extra: dict | None = None):
+            if self.command == "POST" and not getattr(self, "_body_read", False):
+                self.body()  # read an unread upload first, or the client may see a reset connection
             self.send_response(status)
             self.send_header("Content-Type", kind)
             self.send_header("Content-Length", str(len(data)))
@@ -395,16 +427,18 @@ def make_handler(app: App, port: int):
             """Signed-in user's email, '' when running locally without sign-in, None if not allowed."""
             if not app.allowed_users:
                 return ""
-            name = (self.headers.get("X-MS-CLIENT-PRINCIPAL-NAME") or "").strip().lower()
-            return name if name in app.allowed_users else None
+            for email in signed_in_emails(self.headers):
+                if email in app.allowed_users:
+                    return email
+            return None
 
         def require_user(self) -> str | None:
             user = self.user()
             if user is None:
                 if self.headers.get("X-MS-CLIENT-PRINCIPAL-NAME"):
-                    self.send_html("Not allowed for this account.", 403)
+                    self.send_html("Not allowed for this account. <a href='/.auth/logout'>Sign out</a>", 403)
                 else:
-                    self.redirect("/.auth/login/aad?post_login_redirect_uri=" + quote(self.path))
+                    self.redirect("/login?next=" + quote(self.path))
             return user
 
         def same_origin(self) -> bool:
@@ -415,6 +449,7 @@ def make_handler(app: App, port: int):
             return origin in local_origins or origin == f"https://{host}"
 
         def body(self) -> bytes:
+            self._body_read = True
             return self.rfile.read(int(self.headers.get("Content-Length") or 0))
 
         # ---- routes
@@ -427,6 +462,8 @@ def make_handler(app: App, port: int):
                 return self.api_extension("GET", url.path, params)
             if url.path == "/healthz":
                 return self.send(b"ok", "text/plain")
+            if url.path == "/login":
+                return self.send_html(login_page(params.get("next", "/")))
             user = self.require_user()
             if user is None:
                 return
