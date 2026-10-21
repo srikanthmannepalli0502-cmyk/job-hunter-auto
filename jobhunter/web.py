@@ -380,6 +380,21 @@ _EMAIL_CLAIMS = {"email", "preferred_username", "upn",
                  "http://schemas.xmlsoap.org/ws/2005/05/identity/claims/emailaddress"}
 
 
+_SOURCE_NAMES = {"greenhouse": "Greenhouse", "lever": "Lever", "ashby": "Ashby", "workday": "Workday",
+                 "oracle": "Oracle", "smartrecruiters": "SmartRecruiters", "amazon": "amazon.jobs"}
+
+
+def found_note(job: Job | None) -> str:
+    """How you came across a job, for the assistant (e.g. 'How did you hear about us?')."""
+    if job is None:
+        return ""
+    if job.source in _SOURCE_NAMES:
+        how = f"on {job.company}'s own careers site ({_SOURCE_NAMES[job.source]}), not through a recruiter or referral"
+    else:
+        how = f"on the job board {job.source}, not through a recruiter or referral"
+    return f"The user found this posting themselves {how}."
+
+
 def login_page(next_path: str) -> str:
     to = quote(next_path if next_path.startswith("/") and not next_path.startswith("//") else "/")
     return (
@@ -601,7 +616,8 @@ def make_handler(app: App, port: int):
                     answer = assist(LLMClient(), str(data.get("question", "")), app.resume_text(), qa,
                                     title=job.title if job else "", company=job.company if job else "",
                                     description=job.description if job else "",
-                                    page_questions=[str(q) for q in data.get("page_questions", [])])
+                                    page_questions=[str(q) for q in data.get("page_questions", [])],
+                                    found=found_note(job))
                     return self.send_json({"answer": answer})
                 if method == "POST" and len(parts) == 2 and parts[0] == "applied" and parts[1].isdigit():
                     a = app.tracker.log_application(int(parts[1]))
