@@ -115,8 +115,8 @@ def _slug(*parts: str) -> str:
 def make_resume(profile: Profile, tracker: Tracker, job_id: int, jd_text: str = "", llm=None) -> tuple[str, list[str]]:
     """Tailored one-page resume only. Returns (path or '', warnings); the path is saved on the job."""
     from jobhunter.llm import LLMClient
+    from jobhunter.resume.compose import ResumeComposer
     from jobhunter.resume.parser import parse_resume
-    from jobhunter.resume.tailor import ResumeTailor
 
     job = tracker.get_job(job_id)
     if job is None:
@@ -124,11 +124,11 @@ def make_resume(profile: Profile, tracker: Tracker, job_id: int, jd_text: str = 
     base = parse_resume(profile.base_resume)
     if not base:
         raise RuntimeError(f"Could not read your base resume at {profile.base_resume}")
-    tailor = ResumeTailor(base, llm or LLMClient(), profile.must_keep, profile.linkedin_url, profile.output_dir)
+    tailor = ResumeComposer(base, llm or LLMClient(), profile.must_keep, profile.linkedin_url, profile.output_dir)
     path = tailor.tailor(f"{job.title} - {job.company}\n{job.location}\n\n{jd_text or job.description or ''}",
                          job.company, job.title) or ""
     if path:
-        tracker.set_kit(job_id, resume_path=path)
+        tracker.set_kit(job_id, resume_path=path, notes="\n".join(tailor.warnings))
     return path, tailor.warnings
 
 
@@ -155,8 +155,8 @@ def prepare_kit(profile: Profile, tracker: Tracker, job_id: int, jd_text: str = 
     '' for a part that failed. Both paths are saved on the job and the job is shortlisted."""
     from jobhunter.llm import LLMClient
     from jobhunter.resume.cover import write_cover_note
+    from jobhunter.resume.compose import ResumeComposer
     from jobhunter.resume.parser import parse_resume
-    from jobhunter.resume.tailor import ResumeTailor
 
     job = tracker.get_job(job_id)
     if job is None:
@@ -168,7 +168,7 @@ def prepare_kit(profile: Profile, tracker: Tracker, job_id: int, jd_text: str = 
     llm = llm or LLMClient()
     description = jd_text or job.description or ""
     posting = f"{job.title} - {job.company}\n{job.location}\n\n{description}"
-    tailor = ResumeTailor(base, llm, profile.must_keep, profile.linkedin_url, profile.output_dir)
+    tailor = ResumeComposer(base, llm, profile.must_keep, profile.linkedin_url, profile.output_dir)
     resume_path = tailor.tailor(posting, job.company, job.title) or ""
 
     cover_path = ""
@@ -178,5 +178,5 @@ def prepare_kit(profile: Profile, tracker: Tracker, job_id: int, jd_text: str = 
     except Exception as e:  # the resume is still useful without a note
         logger.error(f"Cover note failed: {e}")
 
-    tracker.set_kit(job_id, resume_path, cover_path)
+    tracker.set_kit(job_id, resume_path, cover_path, notes="\n".join(tailor.warnings) if resume_path else None)
     return resume_path, cover_path, tailor.warnings

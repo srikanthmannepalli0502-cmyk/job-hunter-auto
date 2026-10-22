@@ -83,7 +83,7 @@ def test_projects_chosen_by_the_model_and_skills_checked():
     c = ResumeComposer(BASE, FakeLLM(draft_reply()))
     d = c.draft("jd")
     assert [e.id for e, _ in d.projects][:2] == ["P3", "P1"]
-    assert d.skills == ["- BI: Tableau, SQL"]  # Power BI is not in the master resume
+    assert d.skills == ["- Tools: Tableau, SQL"]  # master category name; Power BI is not in the master resume
 
 
 def test_bad_json_falls_back_to_the_master_resume():
@@ -100,3 +100,10 @@ def test_no_bullet_appears_twice_and_page_fits():
     text = c.tailor_text("jd")
     assert text.count("Validated ledger data") == 1
     assert "https://github.com/jane/dash" in text  # project header and link kept
+
+
+def test_rewrites_with_new_shorthand_fall_back():
+    reply = json.loads(draft_reply())
+    reply["experience"][0]["bullets"][0]["text"] = "Validated ledger data w/ SQL across 5 source systems & DBs monthly."
+    d = ResumeComposer(BASE, FakeLLM(json.dumps(reply))).draft("jd")
+    assert dict(d.jobs[0][1])["E1-2"].startswith("Wrote SQL queries")

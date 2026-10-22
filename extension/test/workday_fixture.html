@@ -1,0 +1,104 @@
+<!doctype html>
+<html>
+<head>
+<meta charset="utf-8">
+<title>Workday-like form (extension test fixture)</title>
+<style>
+  body { font: 14px system-ui; max-width: 640px; margin: 20px auto; }
+  [data-automation-id^="formField"] { margin: 10px 0; }
+  ul[role=listbox] { border: 1px solid #999; padding: 4px; list-style: none; }
+  [role=option] { padding: 2px 6px; cursor: pointer; }
+</style>
+</head>
+<body>
+<!-- Structures copied from the Citi Workday application (My Information, My Experience, Questions). -->
+<div data-automation-id="formField-source">
+  <label for="source--source">How Did You Hear About Us?*</label>
+  <input id="source--source" type="text" data-uxi-widget-type="selectinput">
+  <span data-automation-id="promptIcon"></span>
+  <ul data-automation-id="selectedItemList"></ul>
+</div>
+
+<div data-automation-id="formField-candidateIsPreviousWorker">
+  <label>Have you ever been employed by Citi or any of its predecessor companies?*</label>
+  <input type="radio" name="prev" id="prevYes" value="true"><label for="prevYes">Yes</label>
+  <input type="radio" name="prev" id="prevNo" value="false"><label for="prevNo">No</label>
+</div>
+
+<div data-automation-id="formField-legalName--firstName"><label for="fn">First Name*</label><input id="fn" type="text"></div>
+<div data-automation-id="formField-addressLine1"><label for="a1">Address Line 1*</label><input id="a1" type="text"></div>
+<div data-automation-id="formField-postalCode"><label for="zip">Postal Code*</label><input id="zip" type="text"></div>
+<div data-automation-id="formField-countryRegion">
+  <label for="state">State*</label>
+  <button id="state" type="button" aria-haspopup="listbox" data-options="Alabama|New Jersey|New York|North Carolina">Select One</button>
+</div>
+<div data-automation-id="formField-phoneType">
+  <label for="ptype">Phone Device Type*</label>
+  <button id="ptype" type="button" aria-haspopup="listbox" data-options="Landline|Mobile">Select One</button>
+</div>
+<div data-automation-id="formField-countryPhoneCode">
+  <label for="cpc">Country Phone Code*</label>
+  <input id="cpc" type="text">
+  <ul data-automation-id="selectedItemList" role="listbox"><li>United States of America (+1)</li></ul>
+</div>
+<div data-automation-id="formField-phoneNumber"><label for="ph">Phone Number*</label><input id="ph" type="text"></div>
+<div data-automation-id="formField-extension"><label for="ext">Phone Extension</label><input id="ext" type="text"></div>
+
+<div role="group" aria-labelledby="we1"><h4 id="we1">Work Experience 1</h4>
+  <div data-automation-id="formField-jobTitle"><label>Job Title*</label><input type="text"></div>
+  <div data-automation-id="formField-companyName"><label>Company*</label><input type="text"></div>
+  <div data-automation-id="formField-currentlyWorkHere"><label for="cw1">I currently work here</label><input id="cw1" type="checkbox"></div>
+  <div data-automation-id="formField-startDate"><label>From*</label>
+    <input type="text" data-automation-id="dateSectionMonth-input"><input type="text" data-automation-id="dateSectionYear-input"></div>
+  <div data-automation-id="formField-roleDescription"><label>Role Description</label><textarea></textarea></div>
+</div>
+<div role="group" aria-labelledby="we2"><h4 id="we2">Work Experience 2</h4>
+  <div data-automation-id="formField-jobTitle"><label>Job Title*</label><input type="text"></div>
+  <div data-automation-id="formField-companyName"><label>Company*</label><input type="text"></div>
+  <div data-automation-id="formField-endDate"><label>To*</label>
+    <input type="text" data-automation-id="dateSectionMonth-input"><input type="text" data-automation-id="dateSectionYear-input"></div>
+</div>
+<div role="group" aria-labelledby="ws1"><h4 id="ws1">Websites 1</h4>
+  <div data-automation-id="formField-url"><label>URL*</label><input type="text"></div></div>
+<div role="group" aria-labelledby="ws2"><h4 id="ws2">Websites 2</h4>
+  <div data-automation-id="formField-url"><label>URL*</label><input type="text"></div></div>
+
+<div data-automation-id="formField-q1">
+  <label for="auth">Are you legally authorized to work in the country where the position is located?*</label>
+  <button id="auth" type="button" aria-haspopup="listbox" data-options="Yes|No">Select One</button>
+</div>
+<div data-automation-id="formField-q2">
+  <label for="spons">Will you, now or in the future, require sponsorship for employment?*</label>
+  <button id="spons" type="button" aria-haspopup="listbox" data-options="Yes|No">Select One</button>
+</div>
+
+<script>
+// Workday-like widgets: a button opens a listbox of options; a prompt input searches on Enter.
+function openList(anchor, options, onPick) {
+  document.querySelectorAll("ul.popup").forEach((u) => u.remove());
+  const ul = document.createElement("ul");
+  ul.className = "popup"; ul.setAttribute("role", "listbox");
+  for (const text of options) {
+    const li = document.createElement("li");
+    li.setAttribute("role", "option"); li.textContent = text;
+    li.addEventListener("click", () => { onPick(text); ul.remove(); });
+    ul.appendChild(li);
+  }
+  setTimeout(() => anchor.after(ul), 200); // options appear a moment later, like Workday
+}
+document.querySelectorAll("button[aria-haspopup=listbox]").forEach((btn) =>
+  btn.addEventListener("click", () => openList(btn, btn.dataset.options.split("|"), (t) => (btn.textContent = t))));
+const src = document.getElementById("source--source");
+src.addEventListener("keydown", (e) => {
+  if (e.key !== "Enter") return;
+  const all = ["Citi Jobs Career Site", "Citi Sourcer", "Employee Referral", "LinkedIn"];
+  const q = src.value.toLowerCase();
+  openList(src, all.filter((o) => o.toLowerCase().includes(q.split(" ")[0])), (t) => {
+    src.closest("[data-automation-id^=formField]").querySelector("[data-automation-id=selectedItemList]").innerHTML = `<li>${t}</li>`;
+    src.value = "";
+  });
+});
+</script>
+<script src="../content.js"></script>
+</body>
+</html>

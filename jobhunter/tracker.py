@@ -55,6 +55,7 @@ class Job(Base):
     decision: Mapped[str] = mapped_column(String(20), default="new")
     kit_resume_path: Mapped[str | None] = mapped_column(String(500))
     kit_cover_path: Mapped[str | None] = mapped_column(String(500))
+    kit_notes: Mapped[str | None] = mapped_column(Text)  # ATS score and checks for the tailored resume
 
 
 class Application(Base):
@@ -111,7 +112,7 @@ _ADDED_COLUMNS = {
         "sponsor_score": "FLOAT DEFAULT 0", "sponsor_note": "VARCHAR(500)", "overall_score": "FLOAT DEFAULT 0",
         "job_type": "VARCHAR(20)", "sponsorship_warning": "VARCHAR(300)", "last_seen": "DATETIME",
         "closed": "BOOLEAN DEFAULT 0", "decision": "VARCHAR(20) DEFAULT 'new'",
-        "kit_resume_path": "VARCHAR(500)", "kit_cover_path": "VARCHAR(500)",
+        "kit_resume_path": "VARCHAR(500)", "kit_cover_path": "VARCHAR(500)", "kit_notes": "TEXT",
     },
     "applications": {"cover_note_path": "VARCHAR(500)"},
 }
@@ -218,7 +219,7 @@ class Tracker:
             s.commit()
             return job
 
-    def set_kit(self, job_id: int, resume_path: str = "", cover_path: str = "") -> Job:
+    def set_kit(self, job_id: int, resume_path: str = "", cover_path: str = "", notes: str | None = None) -> Job:
         """Remember the tailored resume and cover note prepared for a job (also shortlists it)."""
         with self.Session() as s:
             job = s.get(Job, job_id)
@@ -226,6 +227,8 @@ class Tracker:
                 raise ValueError(f"No job with id {job_id}")
             job.kit_resume_path = resume_path or job.kit_resume_path
             job.kit_cover_path = cover_path or job.kit_cover_path
+            if notes is not None:
+                job.kit_notes = notes
             job.decision = "shortlisted"
             s.commit()
             return job

@@ -96,7 +96,9 @@ Return ONLY the resume text. No markdown, no explanations, no backticks."""
 RESIZE_PROMPT = """Rewrite this resume text so it is between {low} and {high} characters long
 (it is {now} now). Keep its meaning, its numbers and its tense. Write plain, complete sentences
 like the original: no "&", "<", "/" or other shortcuts, a space after every comma, third person
-(no "I"), ending with a period. Add no fact, tool, duty or result
+(no "I"), ending with a period. To shorten, remove or rephrase a whole phrase; never drop the last
+word of a phrase (keep "for executive and operations teams", not "for executive and operations").
+Keep numbers exactly as written (2M+, ~60%). Add no fact, tool, duty or result
 that isn't in the bullet or in these original bullets from the same job:
 {sources}
 

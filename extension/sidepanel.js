@@ -38,7 +38,7 @@ async function refresh() {
   $("jobInfo").innerHTML = j
     ? `<b>${esc(j.title)}</b><br>${esc(j.company)}<br><span class="muted">${j.decision}${j.has_resume ? " &middot; tailored resume ready" : " &middot; no tailored resume yet"}</span>`
     : `<span class="muted">This page isn't one of your saved jobs. You can still fill it and ask questions.</span>`;
-  $("attachResume").disabled = !(j && j.has_resume);
+  $("attachResume").disabled = $("previewResume").disabled = !(j && j.has_resume);
   $("attachCover").disabled = !(j && j.has_cover);
   $("applied").disabled = !j;
 }
@@ -66,7 +66,21 @@ $("fill").addEventListener("click", async () => {
   }
 });
 
+const previewed = new Set(); // "resume:<job id>": shown to you before it can be attached
+
+async function preview(which) {
+  const resp = await api(`/api/x/${which}/${ctx.job.id}`, { raw: true });
+  const url = URL.createObjectURL(await resp.blob());
+  chrome.tabs.create({ url });
+  previewed.add(`${which}:${ctx.job.id}`);
+}
+
 async function attachFile(which) {
+  if (!previewed.has(`${which}:${ctx.job.id}`)) {
+    await preview(which);
+    $("fillResult").innerHTML = `<span class="warn">Opened the ${which} in a new tab. Read it, then click Attach again to upload it.</span>`;
+    return;
+  }
   const resp = await api(`/api/x/${which}/${ctx.job.id}`, { raw: true });
   const buf = new Uint8Array(await resp.arrayBuffer());
   let bin = "";
@@ -79,6 +93,7 @@ async function attachFile(which) {
     ? `<span class="ok">Attached ${esc(filename)}.</span> Check the page shows it.`
     : `<span class="warn">No ${which} upload field found on this page (some sites only show it after you click "Upload").</span>`;
 }
+$("previewResume").addEventListener("click", () => preview("resume").catch((e) => ($("fillResult").textContent = e.message)));
 $("attachResume").addEventListener("click", () => attachFile("resume").catch((e) => ($("fillResult").textContent = e.message)));
 $("attachCover").addEventListener("click", () => attachFile("cover").catch((e) => ($("fillResult").textContent = e.message)));
 

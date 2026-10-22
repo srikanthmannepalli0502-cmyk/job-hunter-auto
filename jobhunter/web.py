@@ -211,8 +211,11 @@ class App:
         for label, path in (("Tailored resume", j.kit_resume_path), ("Cover note", j.kit_cover_path)):
             if path:
                 files += f"<div>{label}: <a href='/file?path={quote(path)}' target='_blank'>{_e(Path(path).name)}</a></div>"
+        if j.kit_resume_path and j.kit_notes:
+            files += ("<div class='muted' style='margin-top:6px'>Resume check:<ul>"
+                      + "".join(f"<li>{_e(n)}</li>" for n in j.kit_notes.splitlines() if n.strip()) + "</ul></div>")
         if busy:
-            files += "<div class='muted'>Generating&hellip; refresh this page in a minute.</div>"
+            files += "<div class='muted'>Generating&hellip; a careful resume takes a few minutes; refresh later.</div>"
         elif state.startswith("failed"):
             files += f"<div class='bad'>{_e(state)}</div>"
         warn = (f"<p class='warn'>&#9888; This posting may not sponsor visas: <i>{_e(j.sponsorship_warning)}</i></p>"
@@ -571,7 +574,7 @@ def make_handler(app: App, port: int):
 
         # ---- API for the Chrome extension (X-Extension-Key)
         def api_extension(self, method: str, path: str, params: dict):
-            from jobhunter.answers import FIELDS, SENSITIVE
+            from jobhunter.answers import EXCLUDE, FIELDS, SENSITIVE, work_history
 
             key = app.tracker.setting("extension_key")
             if not key or not hmac.compare_digest(self.headers.get("X-Extension-Key", ""), key):
@@ -593,8 +596,10 @@ def make_handler(app: App, port: int):
                             "id": job.id, "title": job.title, "company": job.company, "url": job.job_url,
                             "decision": job.decision, "has_resume": bool(job.kit_resume_path),
                             "has_cover": bool(job.kit_cover_path)},
-                        "fields": [{"key": k, "label": label, "keywords": kw, "value": values[k]}
+                        "fields": [{"key": k, "label": label, "keywords": kw, "exclude": EXCLUDE.get(k, []),
+                                    "value": values[k]}
                                    for k, label, kw in FIELDS if k in saved and values.get(k)],
+                        "history": work_history(app.resume_text()),
                         "answers": [{"question": a.question, "answer": a.answer}
                                     for a in app.tracker.answers() if not a.field],
                         "sensitive": SENSITIVE.pattern,

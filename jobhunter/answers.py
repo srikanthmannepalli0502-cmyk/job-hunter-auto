@@ -17,6 +17,8 @@ FIELDS = [
     ("city", "City", ["city", "town"]),
     ("state", "State", ["state", "province", "region"]),
     ("country", "Country", ["country"]),
+    ("address_line1", "Street address", ["address line 1", "street address", "address 1", "street"]),
+    ("postal_code", "ZIP / postal code", ["postal code", "zip code", "zip", "postcode"]),
     ("linkedin", "LinkedIn URL", ["linkedin"]),
     ("github", "GitHub URL", ["github"]),
     ("website", "Portfolio / website", ["website", "portfolio", "personal site", "other url"]),
@@ -36,6 +38,45 @@ FIELDS = [
     ("how_heard", "How did you hear about us?", ["how did you hear", "source", "referred by"]),
 ]
 FIELD_KEYS = {k for k, _, _ in FIELDS}
+
+# Words that mean a label is NOT this field even though a keyword matches,
+# e.g. "Phone Extension" or "Country Phone Code" are not the phone number or the country.
+EXCLUDE = {
+    "phone": ["extension", "ext", "device", "type", "country", "code"],
+    "country": ["phone", "code", "citizenship"],
+    "state": ["statement", "status"],
+    "city": ["citizenship", "ethnicity"],
+    "school": ["high school"],
+    "start_date": ["from", "to"],
+    "email": ["confirm", "re-enter", "retype"],
+}
+
+
+def work_history(resume_text: str) -> dict:
+    """Jobs and education from the master resume, for forms with repeated 'Work Experience' and
+    'Education' sections: [{title, company, start: 'MM/YYYY', end, current, description}]."""
+    from jobhunter.resume.compose import Master
+
+    months = {m: i for i, m in enumerate(
+        ["jan", "feb", "mar", "apr", "may", "jun", "jul", "aug", "sep", "oct", "nov", "dec"], 1)}
+
+    def mm_yyyy(text: str) -> str:
+        m = re.match(r"([A-Za-z]{3})[a-z]*\.?\s+(\d{4})", text.strip())
+        return f"{months.get(m.group(1).lower(), 1):02d}/{m.group(2)}" if m else ""
+
+    jobs = []
+    for e in Master.parse(resume_text).jobs:
+        m = re.match(r"(.+?)\s*\|\s*(.+?)\s{2,}(.+)$", e.header) or re.match(
+            r"(.+?)\s*\|\s*(.+?)\s+((?:[A-Z][a-z]{2}\s+\d{4}).*)$", e.header)
+        if not m:
+            continue
+        company, title, dates = m.group(1).strip(), m.group(2).strip(), m.group(3)
+        start, _, end = dates.partition("-")
+        current = "present" in end.lower()
+        jobs.append({"title": title, "company": company.replace(", TCS", "").strip(), "start": mm_yyyy(start),
+                     "end": "" if current else mm_yyyy(end), "current": current,
+                     "description": "\n".join(f"- {b}" for b in e.bullets)})
+    return {"jobs": jobs}
 
 # Form questions the extension must never fill or learn.
 SENSITIVE = re.compile(

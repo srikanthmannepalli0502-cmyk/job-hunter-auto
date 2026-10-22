@@ -108,7 +108,7 @@ def cmd_tailor(args, profile, tracker) -> None:
     """Resume only (kept for compatibility; `kit` also writes a cover note)."""
     from jobhunter.llm import LLMClient
     from jobhunter.resume.parser import parse_resume
-    from jobhunter.resume.tailor import ResumeTailor
+    from jobhunter.resume.compose import ResumeComposer
 
     job = tracker.get_job(args.job_id)
     if job is None:
@@ -117,11 +117,13 @@ def cmd_tailor(args, profile, tracker) -> None:
     base_text = parse_resume(profile.base_resume)
     if not base_text:
         sys.exit(f"Could not read your base resume at {profile.base_resume}")
-    tailor = ResumeTailor(base_text, LLMClient(), profile.must_keep, profile.linkedin_url, profile.output_dir)
+    tailor = ResumeComposer(base_text, LLMClient(), profile.must_keep, profile.linkedin_url, profile.output_dir)
     path = tailor.tailor(f"{job.title} - {job.company}\n{job.location}\n\n{description}", job.company, job.title)
     if not path:
         sys.exit("Could not produce a one-page resume. Try again or shorten your base resume.")
-    tracker.set_kit(job.id, resume_path=path)
+    tracker.set_kit(job.id, resume_path=path, notes="\n".join(tailor.warnings))
+    for w in tailor.warnings:
+        print(f"CHECK: {w}")
     print(f"\nTailored resume: {Path(path).resolve()}\nReview it before sending - the LLM can make mistakes.")
 
 
