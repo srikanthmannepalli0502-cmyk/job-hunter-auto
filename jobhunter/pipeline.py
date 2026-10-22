@@ -126,10 +126,48 @@ def make_resume(profile: Profile, tracker: Tracker, job_id: int, jd_text: str = 
         raise RuntimeError(f"Could not read your base resume at {profile.base_resume}")
     tailor = ResumeComposer(base, llm or LLMClient(), profile.must_keep, profile.linkedin_url, profile.output_dir)
     path = tailor.tailor(f"{job.title} - {job.company}\n{job.location}\n\n{jd_text or job.description or ''}",
-                         job.company, job.title) or ""
+                         job.company, job.title, feedback=job.kit_feedback or "") or ""
     if path:
         tracker.set_kit(job_id, resume_path=path, notes="\n".join(tailor.warnings))
     return path, tailor.warnings
+
+
+def save_edited_resume(profile: Profile, tracker: Tracker, job_id: int, text: str) -> tuple[str, list[str]]:
+    """Your own edit of a tailored resume's text: rebuild the PDF from it as written, with the same
+    checks shown as notes (an edit may say anything; the notes point out what your master resume
+    doesn't support). Returns (path or '', notes); '' when it no longer fits on one page."""
+    from jobhunter.resume import ats
+    from jobhunter.resume.parser import parse_resume
+    from jobhunter.resume.pdf import check_resume_fit, format_to_pdf
+    from jobhunter.resume.tailor import invented_words, safe_filename
+
+    job = tracker.get_job(job_id)
+    if job is None:
+        raise ValueError(f"No job with id {job_id}")
+    text = text.replace("\r\n", "\n").strip()
+    fit = check_resume_fit(text, profile.linkedin_url)
+    if fit["status"] == "too_long":
+        return "", [f"Your edit fills {fit['fill_percent']}% of the page; shorten it to fit one page."]
+    base = parse_resume(profile.base_resume) or ""
+    report = ats.score(text, f"{job.title}\n{job.description or ''}", base)
+    notes = [report.summary() + f"; page {fit['fill_percent']}% full", "edited by you"]
+    new = [w for line in text.splitlines() for w in invented_words(line, base)]
+    if new:
+        notes.append("words not in your master resume (fine if true): " + ", ".join(dict.fromkeys(new)))
+    path = format_to_pdf(text, str(Path(profile.output_dir) / safe_filename(job.company, job.title)),
+                         linkedin_url=profile.linkedin_url)
+    if path:
+        Path(path).with_suffix(".txt").write_text(text, encoding="utf-8")
+        tracker.set_kit(job_id, resume_path=path, notes="\n".join(notes))
+    return path, notes
+
+
+def resume_text_for(job) -> str:
+    """The text of a job's tailored resume (saved next to its PDF), or '' for older resumes."""
+    if not job or not job.kit_resume_path:
+        return ""
+    txt = Path(job.kit_resume_path).with_suffix(".txt")
+    return txt.read_text(encoding="utf-8") if txt.exists() else ""
 
 
 def make_cover_note(profile: Profile, tracker: Tracker, job_id: int, jd_text: str = "", llm=None) -> str:

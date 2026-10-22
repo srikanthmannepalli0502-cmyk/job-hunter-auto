@@ -214,6 +214,19 @@ class App:
         if j.kit_resume_path and j.kit_notes:
             files += ("<div class='muted' style='margin-top:6px'>Resume check:<ul>"
                       + "".join(f"<li>{_e(n)}</li>" for n in j.kit_notes.splitlines() if n.strip()) + "</ul></div>")
+        if j.kit_resume_path and not busy:
+            asked = "".join(f"<li>{_e(r)}</li>" for r in (j.kit_feedback or "").splitlines() if r.strip())
+            files += (
+                "<form method='post' action='/revise/" + str(j.id) + "' style='margin-top:10px'>"
+                "<label for='fb'><b>Change something?</b> Say what to change; the resume is rebuilt with your "
+                "request (still fact-checked against your master resume).</label>"
+                "<textarea id='fb' name='feedback' rows='3' style='width:100%' placeholder='e.g. Put the Snowflake "
+                "project first; mention reconciliation in the summary; drop the NFL project'></textarea>"
+                "<button class='primary'>Rebuild resume with my changes</button> "
+                f"<a href='/edit/{j.id}'>or edit the text yourself</a></form>"
+                + (f"<div class='muted'>Your requests for this job (used on every rebuild):<ul>{asked}</ul>"
+                   f"<form class='inline' method='post' action='/feedback/clear/{j.id}'><button>Clear requests</button></form></div>"
+                   if asked else ""))
         if busy:
             files += "<div class='muted'>Generating&hellip; a careful resume takes a few minutes; refresh later.</div>"
         elif state.startswith("failed"):
@@ -244,6 +257,27 @@ class App:
             f"<div class='row'>{kit_btns}</div>{files}<div class='row'>{apply_btns}</div></div>"
             f"<div class='card'><pre>{_e(j.description or 'No description from this source.')}</pre></div>")
         return self.page(j.title, body, "", flash, user)
+
+    def edit_page(self, job_id: int, flash: str = "", user: str = "") -> str:
+        from jobhunter.pipeline import resume_text_for
+
+        j = self.tracker.get_job(job_id)
+        if j is None:
+            return self.page("Not found", "<p>No such job.</p>", user=user)
+        text = resume_text_for(j)
+        if not text:
+            body = ("<p>This resume was made before editing existed. Click <b>Regenerate resume</b> on the "
+                    f"<a href='/job/{j.id}'>job page</a> first.</p>")
+        else:
+            body = (f"<div class='card'><h2 style='margin:0'>Edit resume: {_e(j.title)} at {_e(j.company)}</h2>"
+                    "<p class='muted'>Same layout rules as your master resume: headings in capitals, bullets start "
+                    "with \"- \", a job line ends with its dates. Saving rebuilds the PDF exactly as written "
+                    "(it must still fit on one page) and lists anything your master resume doesn't support.</p>"
+                    f"<form method='post' action='/edit/{j.id}'><textarea name='text' rows='40' style='width:100%;"
+                    f"font-family:monospace;font-size:12px'>{_e(text)}</textarea>"
+                    "<p><button class='primary'>Save and rebuild PDF</button> "
+                    f"<a href='/job/{j.id}'>Cancel</a></p></form></div>")
+        return self.page("Edit resume", body, "", flash, user)
 
     def applications_page(self, flash: str = "", user: str = "") -> str:
         rows = []
@@ -499,6 +533,8 @@ def make_handler(app: App, port: int):
                 return self.send_html(app.list_page(params, msg, user))
             if parts[0] == "job" and len(parts) == 2 and parts[1].isdigit():
                 return self.send_html(app.job_page(int(parts[1]), msg, user))
+            if parts[0] == "edit" and len(parts) == 2 and parts[1].isdigit():
+                return self.send_html(app.edit_page(int(parts[1]), msg, user))
             if url.path == "/applications":
                 return self.send_html(app.applications_page(msg, user))
             if url.path == "/runs":
@@ -544,6 +580,20 @@ def make_handler(app: App, port: int):
                 app.extension_key(regenerate=True)
                 return self.redirect("/answers?key=1&msg=" + quote("New key created; update it in the extension."))
             parts = path.strip("/").split("/")
+            if len(parts) == 3 and parts[:2] == ["feedback", "clear"] and parts[2].isdigit():
+                app.tracker.clear_feedback(int(parts[2]))
+                return self.redirect(f"/job/{parts[2]}?msg=" + quote("Requests cleared."))
+            if len(parts) == 2 and parts[0] == "revise" and parts[1].isdigit():
+                app.tracker.add_feedback(int(parts[1]), form.get("feedback", ""))
+                app.worker.submit(int(parts[1]), "resume")
+                return self.redirect(f"/job/{parts[1]}?msg=" + quote("Rebuilding with your changes; refresh in a few minutes."))
+            if len(parts) == 2 and parts[0] == "edit" and parts[1].isdigit():
+                from jobhunter.pipeline import save_edited_resume
+
+                path_saved, notes = save_edited_resume(app.profile, app.tracker, int(parts[1]), form.get("text", ""))
+                if not path_saved:
+                    return self.redirect(f"/edit/{parts[1]}?msg=" + quote(" ".join(notes)))
+                return self.redirect(f"/job/{parts[1]}?msg=" + quote("Saved your edit and rebuilt the PDF."))
             if len(parts) == 3 and parts[:2] == ["answers", "delete"] and parts[2].isdigit():
                 app.tracker.delete_answer(int(parts[2]))
                 return self.redirect("/answers?msg=" + quote("Answer deleted."))
@@ -595,7 +645,10 @@ def make_handler(app: App, port: int):
                         "job": None if job is None else {
                             "id": job.id, "title": job.title, "company": job.company, "url": job.job_url,
                             "decision": job.decision, "has_resume": bool(job.kit_resume_path),
-                            "has_cover": bool(job.kit_cover_path)},
+                            "has_cover": bool(job.kit_cover_path),
+                            "resume_version": Path(job.kit_resume_path).name if job.kit_resume_path else "",
+                            "status": app.worker.status.get(job.id, ""),
+                            "notes": (job.kit_notes or "").splitlines()},
                         "fields": [{"key": k, "label": label, "keywords": kw, "exclude": EXCLUDE.get(k, []),
                                     "value": values[k]}
                                    for k, label, kw in FIELDS if k in saved and values.get(k)],
@@ -633,6 +686,10 @@ def make_handler(app: App, port: int):
                                     page_questions=[str(q) for q in data.get("page_questions", [])],
                                     found=found_note(job))
                     return self.send_json({"answer": answer})
+                if method == "POST" and len(parts) == 2 and parts[0] == "revise" and parts[1].isdigit():
+                    app.tracker.add_feedback(int(parts[1]), str(data.get("instructions", "")))
+                    app.worker.submit(int(parts[1]), "resume")
+                    return self.send_json({"queued": True})
                 if method == "POST" and len(parts) == 2 and parts[0] == "applied" and parts[1].isdigit():
                     a = app.tracker.log_application(int(parts[1]))
                     return self.send_json({"application_id": a.id, "resume": a.resume_path, "cover": a.cover_note_path})

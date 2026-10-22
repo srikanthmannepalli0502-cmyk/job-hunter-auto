@@ -56,6 +56,7 @@ class Job(Base):
     kit_resume_path: Mapped[str | None] = mapped_column(String(500))
     kit_cover_path: Mapped[str | None] = mapped_column(String(500))
     kit_notes: Mapped[str | None] = mapped_column(Text)  # ATS score and checks for the tailored resume
+    kit_feedback: Mapped[str | None] = mapped_column(Text)  # your change requests, one per line, reused on regenerate
 
 
 class Application(Base):
@@ -112,7 +113,7 @@ _ADDED_COLUMNS = {
         "sponsor_score": "FLOAT DEFAULT 0", "sponsor_note": "VARCHAR(500)", "overall_score": "FLOAT DEFAULT 0",
         "job_type": "VARCHAR(20)", "sponsorship_warning": "VARCHAR(300)", "last_seen": "DATETIME",
         "closed": "BOOLEAN DEFAULT 0", "decision": "VARCHAR(20) DEFAULT 'new'",
-        "kit_resume_path": "VARCHAR(500)", "kit_cover_path": "VARCHAR(500)", "kit_notes": "TEXT",
+        "kit_resume_path": "VARCHAR(500)", "kit_cover_path": "VARCHAR(500)", "kit_notes": "TEXT", "kit_feedback": "TEXT",
     },
     "applications": {"cover_note_path": "VARCHAR(500)"},
 }
@@ -218,6 +219,25 @@ class Tracker:
             job.decision = decision
             s.commit()
             return job
+
+    def add_feedback(self, job_id: int, request: str) -> Job:
+        """Remember a change you asked for on this job's resume (kept for later regenerations)."""
+        request = " ".join((request or "").split())[:1000]
+        with self.Session() as s:
+            job = s.get(Job, job_id)
+            if job is None:
+                raise ValueError(f"No job with id {job_id}")
+            if request:
+                job.kit_feedback = "\n".join([*(job.kit_feedback or "").splitlines(), request])[-4000:]
+            s.commit()
+            return job
+
+    def clear_feedback(self, job_id: int) -> None:
+        with self.Session() as s:
+            job = s.get(Job, job_id)
+            if job is not None:
+                job.kit_feedback = None
+                s.commit()
 
     def set_kit(self, job_id: int, resume_path: str = "", cover_path: str = "", notes: str | None = None) -> Job:
         """Remember the tailored resume and cover note prepared for a job (also shortlists it)."""

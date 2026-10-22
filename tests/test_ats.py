@@ -60,3 +60,13 @@ def test_project_link_and_short_lines():
     long_bullet = "- " + "word " * 23 + "end."
     assert short_last_lines(long_bullet)  # spills two words onto a new line
     assert short_last_lines("- short and sweet.") == []
+
+
+def test_job_keywords_are_scored_as_exact_phrases():
+    jd = "Data Analyst: SQL, data-quality checks, regulatory reporting and Basel III."
+    base = "Built SQL checks for data quality and regulatory reports."
+    report = ats.score("SQL only", jd, base, keywords=["regulatory reporting", "Basel III", "invented term"])
+    assert "regulatory reporting" in report.add_these  # in the master resume ("regulatory reports")
+    assert "Basel III" in report.gaps  # in the posting, not in your record
+    assert "invented term" not in report.add_these + report.gaps + report.matched  # not in the posting
+    assert ats.found("data quality", "improving data-quality checks")

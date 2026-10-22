@@ -125,8 +125,10 @@ Rules:
   ({two_low}-{two_high} characters). Plain sentences. Copy every number exactly as the source
   writes it, digits and symbols included (2M+, 15+, ~60%, 98%, 4 hours), never spelled out. Don't
   shorten names into abbreviations the source doesn't use (write "Saudi National Bank", not "SNB").
-- skills: use the candidate's own SKILLS categories (same names), items only from those lines,
-  the job's terms first:
+- skills: use the candidate's own SKILLS categories (same names), items from those lines plus any
+  of the job keywords below, the job's terms first.
+- Job keywords the candidate's resume supports; use each one, in the posting's exact wording, in a
+  bullet whose source already states it, or in skills or the summary:
   {wanted}
 - A domain that appears only in the job description (e.g. "credit risk") may appear only in the
   summary, as the role being targeted.
@@ -138,6 +140,18 @@ SKILLS:
 {catalog}
 
 JOB DESCRIPTION:
+{job}"""
+
+
+KEYWORDS_PROMPT = """List the keywords an applicant tracking system would scan resumes for in this
+job posting: tools, technical skills, methods, and domain or business phrases (for example "SQL",
+"data quality", "regulatory reporting", "stakeholder management"). Use the posting's exact wording,
+1-4 words each, most important first, 15-25 items. Skip degrees, years of experience, locations,
+benefits and soft filler like "team player".
+
+Return JSON only: {{"keywords": ["...", "..."]}}
+
+JOB POSTING:
 {job}"""
 
 
@@ -201,6 +215,8 @@ class ResumeComposer:
         self.warnings: list[str] = []
         self.ats_report: ats.ATSReport | None = None
         self.wanted: set[str] = set()  # job terms the master resume supports
+        self.keywords: list[str] = []  # the posting's own keywords, found in the posting
+        self.feedback = ""  # your requests for this resume ("put the Snowflake project first")
 
     # ---- model
     def _ask(self, prompt: str, effort: str) -> str:
@@ -209,7 +225,7 @@ class ResumeComposer:
         return self.llm.generate(prompt) or ""
 
     def _draft_json(self, job: str) -> dict | None:
-        wanted = sorted(ats.terms_in(job) & ats.terms_in(self.base))
+        wanted = sorted(self.wanted, key=str.lower)
         must = [e.id for e in self.master.projects if any(m.lower()[:25] in e.header.lower() for m in self.must_keep)]
         b = _budgets()
         prompt = PROMPT.format(
@@ -217,6 +233,10 @@ class ResumeComposer:
             must_projects=f"(always include {', '.join(must)})" if must else "",
             wanted=", ".join(wanted) or "(none)", summary=self.master.summary,
             skills="\n".join(self.master.skills), catalog=self.master.catalog(), job=job[:9000], **b)
+        if self.feedback:
+            prompt += ("\n\nTHE CANDIDATE REVIEWED THE LAST VERSION AND ASKS FOR THESE CHANGES. Follow them, "
+                       "except anything that would add a fact, number or skill their resume doesn't have:\n"
+                       + self.feedback[:2000])
         for _ in range(2):
             data = _json(self._ask(prompt, "low"))
             if data and data.get("experience"):
@@ -234,7 +254,7 @@ class ResumeComposer:
         support = " ".join([entry.header, *entry.bullets])
         added = invented_words(text, support)
         shorthand = new_shorthand(text, support)
-        lost = (ats.terms_in(source) & self.wanted) - ats.terms_in(text)  # e.g. dropped "regulatory reporting"
+        lost = {k for k in self.wanted if ats.found(k, source) and not ats.found(k, text)}  # e.g. "regulatory reporting"
         # numbers must be exactly the source's: none added, none dropped (a "70% faster" is the point)
         if not text or _numbers(text) != _numbers(source) or len(added) > 1 or shorthand or lost:
             if text:
@@ -286,13 +306,33 @@ class ResumeComposer:
             name = next((c for c in categories if c.lower() == name.lower()), name)
             merged.setdefault(name, [])
             merged[name] += [i for i in items if i not in merged[name]]
-        lines = [f"- {c}: {', '.join(items)}" for c, items in merged.items()]
+        keep_anyway = {i for items in merged.values() for i in items
+                       if any(i.lower() == k.lower() for k in self.wanted)}  # supported job keywords
+        lines = [f"- {c}: {', '.join(i for i in items if i not in keep_anyway)}" for c, items in merged.items()]
         checked = drop_unsupported_skills("\n".join(["SKILLS", *lines]), skills_text).split("\n")[1:]
+        for c, items in merged.items():
+            extra = [i for i in items if i in keep_anyway]
+            if extra:
+                checked = [l + (", " if l.split(":", 1)[-1].strip() else " ") + ", ".join(extra)
+                           if l.lstrip("-* ").startswith(c + ":") else l for l in checked]
         checked = [l for l in checked if l.split(":", 1)[-1].strip()]
         return checked or self.master.skills
 
+    def extract_keywords(self, job: str) -> list[str]:
+        """The posting's own keywords, from the model, kept only if they really appear in the posting."""
+        data = _json(self._ask(KEYWORDS_PROMPT.format(job=job[:9000]), "low")) or {}
+        out = []
+        for k in data.get("keywords", []) if isinstance(data.get("keywords"), list) else []:
+            k = re.sub(r"\s+", " ", str(k)).strip(" .,;:")
+            if 1 < len(k) <= 40 and ats.found(k, job) and k.lower() not in {x.lower() for x in out}:
+                out.append(k)
+        return out[:30]
+
     def draft(self, job: str) -> Draft:
-        self.wanted = ats.terms_in(job) & ats.terms_in(self.base)
+        self.keywords = self.extract_keywords(job)
+        wanted_all = ats.terms_in(job) | set(self.keywords)
+        self.wanted = {t for t in wanted_all if ats.found(t, self.base)}
+        logger.info(f"Job keywords your resume supports: {sorted(self.wanted, key=str.lower)}")
         data = self._draft_json(job) or {}
         by_id = {e.id: e for e in self.master.jobs + self.master.projects}
         jobs = []
@@ -322,9 +362,9 @@ class ResumeComposer:
         """How many job terms only bullet k of this entry puts on the page (cut those last)."""
         bullets = next(b for e, b in d.jobs + d.projects if e.id == entry.id)
         text = d.render(self.master)
-        mine = ats.terms_in(bullets[k][1]) & self.wanted
+        mine = {t for t in self.wanted if ats.found(t, bullets[k][1])}
         rest = text.replace(bullets[k][1], "")
-        return len({term for term in mine if term not in ats.terms_in(rest)})
+        return len({term for term in mine if not ats.found(term, rest)})
 
     def _cut_one(self, d: Draft, floor: dict) -> bool:
         """Drop one bullet from an entry above its floor: the most over it, projects first, and
@@ -393,16 +433,67 @@ class ResumeComposer:
                         changed = True
         return d
 
+    def place_keywords(self, d: Draft) -> Draft:
+        """Put each supported job keyword that's still missing on the page: bring in one of your own
+        bullets that states it (in place of a less useful one), else add it to the fitting skills line."""
+        for k in sorted(self.wanted, key=str.lower):
+            if ats.found(k, d.render(self.master)):
+                continue
+            placed = False
+            for entry, bullets in d.jobs + d.projects:
+                n = d.keep.get(entry.id, len(bullets))
+                hidden = [i for i in range(n, len(bullets)) if ats.found(k, bullets[i][1])]
+                if not hidden:
+                    continue
+                swap_out = next((j for j in range(n - 1, -1, -1) if self._carries(d, entry, j) == 0), None)
+                if swap_out is None:
+                    continue
+                trial = list(bullets)
+                trial[swap_out], trial[hidden[0]] = trial[hidden[0]], trial[swap_out]
+                old = list(bullets)
+                bullets[:] = trial
+                if self._fits(d)["status"] == "too_long":
+                    bullets[:] = old
+                    continue
+                placed = True
+                logger.info(f"Keyword '{k}': brought in {trial[swap_out][0]}")
+                break
+            if placed:
+                continue
+            line_i = self._skills_line_for(d, k)
+            before = list(d.skills)
+            d.skills[line_i] = d.skills[line_i].rstrip() + (", " if d.skills[line_i].split(":", 1)[-1].strip() else " ") + k
+            if self._fits(d)["status"] == "too_long":
+                d.skills = before
+                logger.info(f"Keyword '{k}': no room on the page")
+            else:
+                logger.info(f"Keyword '{k}': added to skills")
+        return d
+
+    def _skills_line_for(self, d: Draft, keyword: str) -> int:
+        """The skills line a keyword belongs on: the one whose master line or nearby words share most."""
+        words = set(re.findall(r"[a-z]{3,}", keyword.lower()))
+        best, best_score = 0, -1
+        for i, line in enumerate(d.skills):
+            cat = line.lstrip("-* ").split(":", 1)[0]
+            master = next((l for l in self.master.skills if l.lstrip("-* ").startswith(cat)), line)
+            score = len(words & set(re.findall(r"[a-z]{3,}", (master + " " + line).lower())))
+            if score > best_score:
+                best, best_score = i, score
+        return best
+
     # ---- public
-    def tailor_text(self, job_description: str) -> str:
+    def tailor_text(self, job_description: str, feedback: str = "") -> str:
+        self.feedback = feedback.strip()
         d = self.fit(self.draft(job_description))
         d = self.grow(self.fix_short_lines(d))
-        d = self.fit(d)
+        d = self.fit(self.place_keywords(d))
         return d.render(self.master)
 
-    def tailor(self, job_description: str, company: str, role: str) -> str:
-        text = self.tailor_text(job_description)
-        self.ats_report = ats.score(text, job_description, self.base)
+    def tailor(self, job_description: str, company: str, role: str, feedback: str = "") -> str:
+        text = self.tailor_text(job_description, feedback)
+        self.text = text
+        self.ats_report = ats.score(text, job_description, self.base, self.keywords)
         fit = check_resume_fit(text, self.linkedin_url)
         logger.info(f"{self.ats_report.summary()}; page {fit['fill_percent']}% full")
         self.warnings = [self.ats_report.summary()]
@@ -412,4 +503,7 @@ class ResumeComposer:
         self.warnings += [f"missing: {m}" for m in missing]
         for w in self.warnings:
             logger.warning(f"Check before sending: {w}")
-        return format_to_pdf(text, str(self.output_dir / safe_filename(company, role)), linkedin_url=self.linkedin_url)
+        path = format_to_pdf(text, str(self.output_dir / safe_filename(company, role)), linkedin_url=self.linkedin_url)
+        if path:  # the text next to the PDF, so you can edit it and rebuild the PDF
+            Path(path).with_suffix(".txt").write_text(text, encoding="utf-8")
+        return path

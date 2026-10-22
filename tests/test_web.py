@@ -185,3 +185,44 @@ def test_google_sign_in_is_matched_by_email_claim(server):
     principal["claims"][1]["val"] = "someone@gmail.com"
     headers["X-MS-CLIENT-PRINCIPAL"] = base64.b64encode(json.dumps(principal).encode()).decode()
     assert httpx.get(f"{base}/", headers=headers).status_code == 403
+
+
+def test_change_requests_are_kept_and_rebuild_the_resume(server, monkeypatch):
+    seen = []
+    monkeypatch.setattr("jobhunter.pipeline.make_resume",
+                        lambda profile, tracker, job_id: (seen.append(tracker.get_job(job_id).kit_feedback) or ("r.pdf", [])))
+    base, app = server()
+    ingest(base, ["Acme"])
+    job = app.tracker.top_jobs(limit=5)[0]
+    app.tracker.set_kit(job.id, resume_path="old.pdf")
+    r = httpx.post(f"{base}/revise/{job.id}", data={"feedback": "Put the Lake project first"}, follow_redirects=False)
+    assert r.status_code == 303
+    for _ in range(50):
+        if seen:
+            break
+        time.sleep(0.05)
+    assert seen == ["Put the Lake project first"]
+    h = {"X-Extension-Key": app.extension_key()}
+    assert httpx.post(f"{base}/api/x/revise/{job.id}", json={"instructions": "Shorter summary"}, headers=h).json() == {"queued": True}
+    assert app.tracker.get_job(job.id).kit_feedback.splitlines() == ["Put the Lake project first", "Shorter summary"]
+    httpx.post(f"{base}/feedback/clear/{job.id}")
+    assert app.tracker.get_job(job.id).kit_feedback is None
+
+
+def test_editing_the_resume_text_rebuilds_the_pdf(server, tmp_path):
+    base, app = server()
+    ingest(base, ["Acme"])
+    job = app.tracker.top_jobs(limit=5)[0]
+    assert "Regenerate resume" in httpx.get(f"{base}/edit/{job.id}").text  # no text saved yet
+    out = tmp_path / "tailored"
+    out.mkdir(exist_ok=True)
+    (out / "acme.pdf").write_bytes(b"%PDF")
+    (out / "acme.txt").write_text("JANE DOE\nTown | jane@example.com | +1-555-123-4567\n\nSUMMARY\nAnalyst.", encoding="utf-8")
+    app.tracker.set_kit(job.id, resume_path=str(out / "acme.pdf"))
+    assert "Analyst." in httpx.get(f"{base}/edit/{job.id}").text
+    text = "JANE DOE\nTown | jane@example.com | +1-555-123-4567\n\nSUMMARY\nAnalyst who loves SQL.\n\nSKILLS\n- Tools: SQL"
+    r = httpx.post(f"{base}/edit/{job.id}", data={"text": text}, follow_redirects=False)
+    assert r.status_code == 303 and "Saved" in r.headers["location"].replace("%20", " ")
+    saved = app.tracker.get_job(job.id)
+    assert saved.kit_resume_path.endswith(".pdf") and "edited by you" in saved.kit_notes
+    assert "Analyst who loves SQL." in open(saved.kit_resume_path[:-4] + ".txt", encoding="utf-8").read()

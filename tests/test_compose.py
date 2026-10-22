@@ -107,3 +107,28 @@ def test_rewrites_with_new_shorthand_fall_back():
     reply["experience"][0]["bullets"][0]["text"] = "Validated ledger data w/ SQL across 5 source systems & DBs monthly."
     d = ResumeComposer(BASE, FakeLLM(json.dumps(reply))).draft("jd")
     assert dict(d.jobs[0][1])["E1-2"].startswith("Wrote SQL queries")
+
+
+class KeywordLLM(FakeLLM):
+    def generate(self, prompt):
+        self.prompts.append(prompt)
+        if "applicant tracking system would scan" in prompt:
+            return json.dumps({"keywords": ["error rates", "ledger data", "Kubernetes"]})
+        return self.reply if "Return JSON only" in prompt else ""
+
+
+def test_supported_job_keywords_reach_the_page():
+    reply = json.loads(draft_reply())
+    reply["skills"] = [{"category": "Tools", "items": ["SQL"]}]
+    c = ResumeComposer(BASE, KeywordLLM(json.dumps(reply)))
+    text = c.tailor_text("Analyst: SQL, ledger data, error rates, Kubernetes")
+    assert c.wanted >= {"ledger data", "error rates"} and "Kubernetes" not in c.wanted  # not in the master
+    assert "ledger data" in text.lower() and "error rates" in text.lower()
+    assert "kubernetes" not in text.lower()
+    assert "ledger data" in c.llm.prompts[1]  # the draft was told which keywords it may use
+
+
+def test_feedback_goes_into_the_draft_prompt():
+    c = ResumeComposer(BASE, KeywordLLM(draft_reply()))
+    c.tailor_text("jd", feedback="Put the Lake project first")
+    assert "ASKS FOR THESE CHANGES" in c.llm.prompts[1] and "Lake project first" in c.llm.prompts[1]

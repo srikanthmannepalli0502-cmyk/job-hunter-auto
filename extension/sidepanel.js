@@ -41,6 +41,7 @@ async function refresh() {
   $("attachResume").disabled = $("previewResume").disabled = !(j && j.has_resume);
   $("attachCover").disabled = !(j && j.has_cover);
   $("applied").disabled = !j;
+  $("revise").disabled = !(j && j.has_resume);
 }
 
 $("openOptions").addEventListener("click", (e) => { e.preventDefault(); chrome.runtime.openOptionsPage(); });
@@ -129,6 +130,34 @@ $("ask").addEventListener("click", async () => {
   } catch (e) {
     $("answer").innerHTML = `<span class="bad">${esc(e.message)}</span>`;
   }
+});
+
+// Ask for a rebuilt resume, then watch for the new version (it takes a few minutes).
+let watching = null;
+$("revise").addEventListener("click", async () => {
+  const instructions = $("revision").value.trim();
+  if (!ctx?.job || !instructions) return;
+  const jobId = ctx.job.id, before = ctx.job.resume_version;
+  await api(`/api/x/revise/${jobId}`, { method: "POST", body: { instructions } });
+  $("reviseResult").innerHTML = `<span class="muted">Rebuilding with your changes (fact-checked as always). This takes a few minutes; you can keep filling the form.</span>`;
+  clearInterval(watching);
+  watching = setInterval(async () => {
+    try {
+      const now = await api(`/api/x/context?url=${encodeURIComponent(tab.url || "")}&title=${encodeURIComponent(tab.title || "")}`);
+      const j = now.job;
+      if (!j || j.id !== jobId) return;
+      if (j.status.startsWith("failed")) {
+        clearInterval(watching);
+        $("reviseResult").innerHTML = `<span class="bad">${esc(j.status)}</span>`;
+      } else if (j.resume_version && j.resume_version !== before) {
+        clearInterval(watching);
+        ctx = now;
+        previewed.delete(`resume:${jobId}`);
+        $("revision").value = "";
+        $("reviseResult").innerHTML = `<span class="ok">New version ready.</span> ${esc((j.notes || [])[0] || "")}<br>Preview it, then Attach.`;
+      }
+    } catch { /* keep waiting */ }
+  }, 15000);
 });
 
 $("applied").addEventListener("click", async () => {

@@ -53,6 +53,26 @@ def terms_in(text: str) -> set[str]:
     return {name for name, rx in _COMPILED if rx.search(text or "")}
 
 
+_BY_NAME = {name: rx for name, rx in _COMPILED}
+
+
+def term_rx(term: str) -> re.Pattern:
+    """How to find a term: the built-in pattern for known terms, else the exact phrase (words may be
+    joined by spaces, hyphens or slashes; the last word may be plural)."""
+    words = [re.escape(w) for w in re.split(r"[\s/-]+", term.strip()) if w]
+    if not words:
+        return re.compile(r"(?!x)x")
+    words[-1] += r"(?:s|es)?"
+    phrase = _B + r"[\s/-]+".join(words) + r"(?![a-z])"
+    if term in _BY_NAME:  # the built-in pattern (with its synonyms) or the phrase itself
+        return re.compile(f"(?:{_BY_NAME[term].pattern})|(?:{phrase})", re.I)
+    return re.compile(phrase, re.I)
+
+
+def found(term: str, text: str) -> bool:
+    return bool(term_rx(term).search(text or ""))
+
+
 @dataclass
 class ATSReport:
     score: int  # % of the posting's terms found in the resume
@@ -85,13 +105,16 @@ def format_problems(resume_text: str) -> list[str]:
     return problems
 
 
-def score(resume_text: str, job_description: str, base_resume: str) -> ATSReport:
-    wanted = terms_in(job_description)
-    have = terms_in(resume_text)
-    supported = terms_in(base_resume)
-    matched = sorted(wanted & have)
-    add_these = sorted((wanted - have) & supported)
-    gaps = sorted(wanted - have - supported)
+def score(resume_text: str, job_description: str, base_resume: str,
+          keywords: list[str] | None = None) -> ATSReport:
+    """keywords: the posting's own terms (picked by the model, each found in the posting); they are
+    scored next to the built-in list. A term is "supported" when the master resume contains it."""
+    wanted = terms_in(job_description) | {k for k in keywords or [] if found(k, job_description)}
+    have = {t for t in wanted if found(t, resume_text)}
+    supported = {t for t in wanted if found(t, base_resume)}
+    matched = sorted(wanted & have, key=str.lower)
+    add_these = sorted((wanted - have) & supported, key=str.lower)
+    gaps = sorted(wanted - have - supported, key=str.lower)
     pct = round(100 * len(matched) / len(wanted)) if wanted else 100
     return ATSReport(pct, matched, add_these, gaps, format_problems(resume_text))
 
