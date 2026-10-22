@@ -37,6 +37,47 @@ from jobhunter.resume.tailor import (
 # give way before experience), then the third project, then down to the minimums.
 FULL_BULLETS = {"current": 3, "job": 5, "project": 2}
 MIN_BULLETS = {"current": 2, "job": 3, "project": 1}
+# Shown in bullets and the summary, never listed under SKILLS (a recruiter skims past "communication").
+SOFT_SKILLS = {"communication", "problem solving", "cross-functional", "stakeholders", "collaboration",
+               "teamwork", "leadership", "attention to detail", "time management"}
+
+
+def concept_key(term: str) -> set[str]:
+    """Normalised forms of a term and its aliases: same key = same concept ("predictive models" ~
+    "predictive modeling", "LLMs" ~ "large language models"), while "SQL" and "PL/SQL" differ."""
+    keys = set()
+    for v in ats.variants(term):
+        words = re.findall(r"[a-z0-9+#]+", v.lower())
+        words = [re.sub(r"(ing|es|s)$", "", w) if len(w) > 4 else re.sub(r"s$", "", w) for w in words]
+        if words:
+            keys.add(" ".join(words))
+    return keys
+
+
+# Plain summary words that state no fact of their own.
+SUMMARY_WORDS = {"targeting", "seeking", "developed", "delivered", "experienced", "skilled", "proven",
+                 "strong", "hands-on", "focused", "passionate", "applying", "bringing", "background"}
+
+
+def clean_title(title: str) -> str:
+    """'Data Scientist 3 - Freewheel' -> 'Data Scientist'; 'Data Analyst, Assistant Vice President' -> 'Data Analyst'."""
+    t = re.split(r"\s+[-|(]\s*|,\s*", title.strip())[0]
+    t = re.sub(r"\s+(?:[IVX]+|\d+|Sr\.?|Jr\.?)$", "", t)
+    return t.strip() or title.strip()
+
+
+def lower_term(term: str) -> str:
+    """The posting's capitals off a generic term for use mid-sentence ("Data integration" -> "data
+    integration"), keeping acronyms and names ("ETL", "Python")."""
+    return " ".join(w if (w.isupper() or any(c.isupper() for c in w[1:])) else w.lower() for w in term.split())
+
+
+TOOL_FREE_TERMS = {"data pipelines", "data warehouse", "data modeling", "data quality", "data validation",
+                   "data governance", "data lineage", "data analysis", "data visualization", "dashboards",
+                   "reporting", "KPIs", "ad hoc analysis", "root cause analysis", "reconciliation", "statistics",
+                   "A/B testing", "machine learning", "forecasting", "predictive modeling", "regression",
+                   "stakeholders", "cross-functional", "communication", "problem solving", "automation",
+                   "documentation", "financial data", "ETL", "CI/CD"}
 FULL_CERTIFICATIONS = 3
 
 
@@ -146,16 +187,47 @@ JOB DESCRIPTION:
 
 
 SUMMARY_PROMPT = """Write the SUMMARY of this candidate's resume for the job below: 3-4 sentences, {low}-{high}
-characters, third person without "I" (start like "Data professional with 3 years..."). Use only facts,
-numbers and skills from the RESUME; name the job's role as the target. Work in these job keywords
-where the resume supports them: {keywords}. Name each skill once (never a term and its synonym or
-abbreviation together). Return only the summary text.
+characters, written without pronouns (no "I", "he", "she"; start like "Data professional with 3
+years..."). Keep every result with the work that produced it (a time saved by automation stays with
+the automation, not the dashboards). Use only facts,
+numbers and skills from the RESUME; name "{role}" as the target role. An industry or business area
+the resume doesn't show (for example "ad tech") may appear only as what the candidate is targeting,
+never as experience. Work in these job keywords where the resume supports them, in lower case unless
+they are names or acronyms: {keywords}. Plain, readable sentences (no semicolon lists); name each skill
+once (never a term and its synonym or abbreviation together). Return only the summary text.
 
 RESUME:
 {resume}
 
 JOB:
 {job}"""
+
+
+EVIDENCE_PROMPT = """These keywords from a job posting don't appear word for word in the candidate's resume.
+For each one, decide whether something the resume ALREADY SAYS is a real instance of it (not merely
+related). Examples: "cross-functional" <- "Partnered with business analysts, operations and finance
+across 3 business units"; "predictive analytics" <- "Built a predictive model ... reaching 87% accuracy".
+But "optimization models" is NOT shown by "gradient descent", and a tool (Databricks, AWS, Looker) is
+never shown by a different tool (Snowflake, Azure, Tableau).
+
+kind: "tool" for a named product, platform, language or library; "domain" for an industry or
+business area (ad tech, credit risk); "skill" for a method, practice or ability.
+Return JSON only:
+{{"claims": [{{"term": "...", "kind": "skill|tool|domain", "entry": "E2 or P6 (the id below)",
+  "evidence": "the exact words copied from that entry's bullet"}}]}}
+Leave out every term the resume doesn't really show.
+
+KEYWORDS: {terms}
+
+RESUME (ids in front):
+{catalog}"""
+
+
+WEAVE_PROMPT = """Rewrite this resume bullet so it naturally uses the words "{term}" (or "{term_alt}"),
+keeping every fact, number and its tense, and about the same length ({low}-{high} characters). Add
+nothing else. Return only the bullet text, without a leading dash.
+
+Bullet: {bullet}"""
 
 
 KEYWORDS_PROMPT = """List the keywords an applicant tracking system would scan resumes for in this
@@ -234,6 +306,7 @@ class ResumeComposer:
         self.wanted: set[str] = set()  # job terms the master resume supports
         self.keywords: list[str] = []  # the posting's own keywords, found in the posting
         self.feedback = ""  # your requests for this resume ("put the Snowflake project first")
+        self.claims: dict[str, tuple[str, str]] = {}  # job term -> (entry id, quote from your resume proving it)
 
     # ---- model
     def _ask(self, prompt: str, effort: str) -> str:
@@ -250,6 +323,7 @@ class ResumeComposer:
             must_projects=f"(always include {', '.join(must)})" if must else "",
             wanted=", ".join(wanted) or "(none)", summary=self.master.summary,
             skills="\n".join(self.master.skills), catalog=self.master.catalog(), job=job[:9000], **b)
+        prompt += f"\n\nIn the summary, name the target role as \"{clean_title(job.split(chr(10), 1)[0].split(' - ')[0])}\"."
         if self.feedback:
             prompt += ("\n\nTHE CANDIDATE REVIEWED THE LAST VERSION AND ASKS FOR THESE CHANGES. Follow them, "
                        "except anything that would add a fact, number or skill their resume doesn't have:\n"
@@ -268,7 +342,7 @@ class ResumeComposer:
         if source is None:
             return None
         text = re.sub(r"\s+", " ", (text or "").strip().lstrip("-* ")).strip()
-        support = " ".join([entry.header, *entry.bullets])
+        support = " ".join([entry.header, *entry.bullets] + [k for k, (eid, _) in self.claims.items() if eid == entry.id])
         added = invented_words(text, support)
         shorthand = new_shorthand(text, support)
         lost = {k for k in self.wanted if ats.found(k, source) and not ats.found(k, text)}  # e.g. "regulatory reporting"
@@ -299,8 +373,11 @@ class ResumeComposer:
         return out
 
     def _summary_ok(self, text: str, job: str) -> bool:
-        extra = [w for w in invented_words(text, self.base) if w.lower() not in job.lower()]
-        return bool(text) and _numbers(text) <= _numbers(self.base) and len(extra) <= 2 \
+        extra = [w for w in invented_words(text, self.base)
+                 if w.lower() not in job.lower() and w.lower() not in SUMMARY_WORDS]
+        if re.search(r"(he|she|his|her|they|their|i|my)", text, re.I):
+            return False  # resumes don't use pronouns
+        return bool(text) and _numbers(text) <= _numbers(self.base) and len(extra) <= 2 and text.count(";") <= 1 \
             and not re.search(r"\bI\b", text) and not new_shorthand(text, self.base + " " + job)
 
     def _summary(self, text: str, job: str) -> str:
@@ -308,7 +385,8 @@ class ResumeComposer:
         if self._summary_ok(text, job):
             return text
         b = _budgets()
-        prompt = SUMMARY_PROMPT.format(low=int(b["cpl"] * 1.05 * 3.6), high=int(b["cpl"] * 1.05 * 3.95),
+        prompt = SUMMARY_PROMPT.format(role=clean_title(job.split("\n", 1)[0].split(" - ")[0]),
+                                       low=int(b["cpl"] * 1.05 * 3.6), high=int(b["cpl"] * 1.05 * 3.95),
                                        keywords=", ".join(sorted(self.wanted, key=str.lower)[:12]) or "(none)",
                                        resume=self.base, job=job[:6000])
         retry = re.sub(r"\s+", " ", self._ask(prompt, "low").strip().strip('"'))
@@ -349,9 +427,11 @@ class ResumeComposer:
             head, _, items = line.partition(":")
             keep = []
             for item in [i.strip() for i in re.split(r",(?![^(]*\))", items) if i.strip()]:
-                same = item.lower() in seen or any(ats.found(item, s) or ats.found(s, item) for s in seen)
-                if not same:  # "LLMs" after "large language models", "predictive models" after "predictive modeling"
-                    seen.add(item.lower())
+                if lower_term(item).lower() in SOFT_SKILLS:
+                    continue  # shown in bullets instead
+                key = concept_key(item)
+                if not (key & seen):  # "LLMs" after "large language models"; but SQL and PL/SQL are both kept
+                    seen |= key
                     keep.append(item)
             if keep:
                 deduped.append(f"{head}: {', '.join(keep)}")
@@ -367,10 +447,40 @@ class ResumeComposer:
                 out.append(k)
         return out[:30]
 
+    def find_evidence(self, terms: list[str]) -> dict[str, tuple[str, str]]:
+        """Job keywords your resume shows without using the word: kept only when the model quotes
+        your own words (checked to be really there, in that job or project), and never for a tool,
+        a platform or an industry you'd have to have used or worked in."""
+        terms = [k for k in terms if k not in ats._BY_NAME or k in TOOL_FREE_TERMS][:25]  # built-in tools never
+        if not terms:
+            return {}
+        data = _json(self._ask(EVIDENCE_PROMPT.format(terms="; ".join(terms), catalog=self.master.catalog()), "low")) or {}
+        by_id = {e.id: e for e in self.master.jobs + self.master.projects}
+        norm = lambda s: re.sub(r"[^a-z0-9%+]+", " ", s.lower()).strip()
+        out = {}
+        for c in data.get("claims", []) if isinstance(data.get("claims"), list) else []:
+            if not isinstance(c, dict):
+                continue
+            term, entry = str(c.get("term", "")).strip(), by_id.get(str(c.get("entry", "")).strip())
+            quote = str(c.get("evidence", "")).strip()
+            if term not in terms or c.get("kind") != "skill" or entry is None or len(norm(quote)) < 15:
+                continue
+            if ats.terms_in(term) - TOOL_FREE_TERMS or re.search(r"[a-z][A-Z]|^[A-Z]{2,}$", term):
+                continue  # a named tool ("Databricks", "LangGraph", "AWS"): only if your resume names it
+            if not any(norm(quote) in norm(b) for b in [entry.header, *entry.bullets]):
+                logger.info(f"Evidence for '{term}' isn't in your resume as quoted; not used")
+                continue
+            out[term] = (entry.id, quote)
+            logger.info(f"Keyword '{term}' shown by {entry.id}: \"{quote[:80]}\"")
+        return out
+
     def draft(self, job: str) -> Draft:
         self.keywords = self.extract_keywords(job)
         wanted_all = ats.terms_in(job) | set(self.keywords)
         self.wanted = {t for t in wanted_all if ats.found(t, self.base)}
+        unsaid = (set(self.keywords) | (ats.terms_in(job) & TOOL_FREE_TERMS)) - self.wanted
+        self.claims = self.find_evidence(sorted(unsaid, key=str.lower))
+        self.wanted |= set(self.claims)
         logger.info(f"Job keywords your resume supports: {sorted(self.wanted, key=str.lower)}")
         data = self._draft_json(job) or {}
         by_id = {e.id: e for e in self.master.jobs + self.master.projects}
@@ -378,15 +488,20 @@ class ResumeComposer:
         given = {str(x.get("id")): x.get("bullets") for x in data.get("experience", []) if isinstance(x, dict)}
         for e in self.master.jobs:
             jobs.append((e, self._bullets(e, given.get(e.id))))
-        projects = []
-        for x in data.get("projects", [])[:3]:
-            e = by_id.get(str(x.get("id"))) if isinstance(x, dict) else None
-            if e and e.kind == "project" and all(e is not p for p, _ in projects):
-                projects.append((e, self._bullets(e, x.get("bullets"))))
-        for e in self.master.projects:  # must-keep projects, then fill up to 3 in master order
+        # Projects: the ones that show the most of this job's keywords (counting evidence claims),
+        # must-keep items always; the model's own choice and order break ties.
+        chosen = {str(x.get("id")): (i, x.get("bullets")) for i, x in enumerate(data.get("projects", []))
+                  if isinstance(x, dict)}
+
+        def fit_score(e: Entry) -> tuple:
+            text = " ".join([e.header, *e.bullets])
+            shown = {k for k in self.wanted if ats.found(k, text)} | {k for k, (eid, _) in self.claims.items() if eid == e.id}
             must = any(m.lower()[:25] in e.header.lower() for m in self.must_keep)
-            if (must or len(projects) < 3) and all(e is not p for p, _ in projects):
-                projects.append((e, self._bullets(e, [])))
+            return (must, len(shown), -chosen.get(e.id, (99, None))[0])
+
+        ranked = sorted(self.master.projects, key=fit_score, reverse=True)[:3]
+        projects = [(e, self._bullets(e, chosen.get(e.id, (0, []))[1])) for e in ranked]
+        logger.info("Projects: " + ", ".join(f"{e.id} ({fit_score(e)[1]} job terms)" for e in ranked))
         return Draft(self._summary(data.get("summary", ""), job), self._skills(data.get("skills")),
                      jobs, projects[:3] if len(projects) > 3 else projects, list(self.master.certifications))
 
@@ -502,6 +617,11 @@ class ResumeComposer:
                 break
             if placed:
                 continue
+            if lower_term(k).lower() in SOFT_SKILLS:
+                if not self._weave(d, k):
+                    logger.info(f"Keyword '{k}': couldn't work it into its bullet; left out")
+                continue
+            k = lower_term(k)
             line_i = self._skills_line_for(d, k)
             before = list(d.skills)
             d.skills[line_i] = d.skills[line_i].rstrip() + (", " if d.skills[line_i].split(":", 1)[-1].strip() else " ") + k
@@ -517,6 +637,43 @@ class ResumeComposer:
                                   "items": [i.strip() for i in re.split(r",(?![^(]*\))", l.split(":", 1)[1])]}
                                  for l in d.skills if ":" in l])
         return d
+
+    def _weave(self, d: Draft, k: str) -> bool:
+        """Work a soft skill into the shown bullet that proves it ('Partnered cross-functionally with...')."""
+        claim = self.claims.get(k)
+        if not claim:
+            return False
+        eid, quote = claim
+        measure = _TextMeasure()
+        for entry, bullets in d.jobs + d.projects:
+            if entry.id != eid:
+                continue
+            n_shown = d.keep.get(entry.id, len(bullets))
+            hidden = next((j for j in range(n_shown, len(bullets))
+                           if quote[:40].lower() in (entry.source(bullets[j][0]) or "").lower()), None)
+            if hidden is not None:  # the proving bullet was cut: bring it back instead of a less useful one
+                out = next((j for j in range(n_shown - 1, -1, -1) if self._carries(d, entry, j) == 0), None)
+                if out is None:
+                    return False
+                bullets[out], bullets[hidden] = bullets[hidden], bullets[out]
+            for i in range(n_shown):
+                sid, text = bullets[i]
+                source = entry.source(sid) or ""
+                if quote[:40].lower() not in source.lower():
+                    continue
+                n = len(text)
+                for _ in range(2):
+                    reply = self._ask(WEAVE_PROMPT.format(term=lower_term(k), term_alt=lower_term(k).replace(" ", "-"),
+                                                          low=int(n * 0.9), high=int(n * 1.08), bullet=text), "low")
+                    new = self._checked(entry, sid, reply.strip().lstrip("-* ").strip())
+                    if not (new and ats.found(k, new)):
+                        continue
+                    bullets[i] = (sid, new)
+                    if self._fits(d)["status"] != "too_long" and measure.last_share("- " + new) >= 0.4:
+                        logger.info(f"Keyword '{k}': worked into {sid}")
+                        return True
+                    bullets[i] = (sid, text)  # no room, or it leaves a near-empty line
+        return False
 
     def _skills_line_for(self, d: Draft, keyword: str) -> int:
         """The skills line a keyword belongs on: the one whose master line or nearby words share most."""
@@ -541,11 +698,15 @@ class ResumeComposer:
     def tailor(self, job_description: str, company: str, role: str, feedback: str = "") -> str:
         text = self.tailor_text(job_description, feedback)
         self.text = text
-        self.ats_report = ats.score(text, job_description, self.base, self.keywords)
+        self.ats_report = ats.score(text, job_description, self.base, self.keywords, set(self.claims))
         fit = check_resume_fit(text, self.linkedin_url)
         logger.info(f"{self.ats_report.summary()}; page {fit['fill_percent']}% full")
         self.warnings = [self.ats_report.summary()]
-        if claims := ats.unsupported_claims(text, self.base):
+        used = [f"'{k}' <- \"{q[:90]}\" ({eid})" for k, (eid, q) in sorted(self.claims.items()) if ats.found(k, text)]
+        if used:
+            self.warnings.append("keywords shown by your own work (check you're happy to claim them): " + "; ".join(used))
+        claimed = {k.lower() for k in self.claims}
+        if claims := [c for c in ats.unsupported_claims(text, self.base) if c.lower() not in claimed]:
             self.warnings.append("not in your master resume, check the wording: " + ", ".join(claims))
         missing = [m for m in self.must_keep if m.upper()[:30] not in text.upper()]
         self.warnings += [f"missing: {m}" for m in missing]

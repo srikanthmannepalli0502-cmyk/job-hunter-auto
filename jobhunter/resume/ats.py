@@ -137,12 +137,12 @@ def format_problems(resume_text: str) -> list[str]:
 
 
 def score(resume_text: str, job_description: str, base_resume: str,
-          keywords: list[str] | None = None) -> ATSReport:
+          keywords: list[str] | None = None, claimed: set[str] | None = None) -> ATSReport:
     """keywords: the posting's own terms (picked by the model, each found in the posting); they are
     scored next to the built-in list. A term is "supported" when the master resume contains it."""
     wanted = terms_in(job_description) | {k for k in keywords or [] if found(k, job_description)}
     have = {t for t in wanted if found(t, resume_text)}
-    supported = {t for t in wanted if found(t, base_resume)}
+    supported = {t for t in wanted if found(t, base_resume) or t in (claimed or ())}
     matched = sorted(wanted & have, key=str.lower)
     add_these = sorted((wanted - have) & supported, key=str.lower)
     gaps = sorted(wanted - have - supported, key=str.lower)

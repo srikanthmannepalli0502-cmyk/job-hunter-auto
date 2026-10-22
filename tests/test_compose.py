@@ -132,3 +132,33 @@ def test_feedback_goes_into_the_draft_prompt():
     c = ResumeComposer(BASE, KeywordLLM(draft_reply()))
     c.tailor_text("jd", feedback="Put the Lake project first")
     assert "ASKS FOR THESE CHANGES" in c.llm.prompts[1] and "Lake project first" in c.llm.prompts[1]
+
+
+def test_helpers_for_titles_concepts_and_casing():
+    from jobhunter.resume.compose import clean_title, concept_key, lower_term
+
+    assert clean_title("Data Scientist 3") == "Data Scientist"
+    assert clean_title("Data Analyst, Assistant Vice President") == "Data Analyst"
+    assert not (concept_key("SQL") & concept_key("PL/SQL"))
+    assert concept_key("LLMs") & concept_key("large language models")
+    assert lower_term("Data integration") == "data integration" and lower_term("ETL pipelines") == "ETL pipelines"
+
+
+class EvidenceLLM(FakeLLM):
+    def generate(self, prompt):
+        self.prompts.append(prompt)
+        if "applicant tracking system would scan" in prompt:
+            return json.dumps({"keywords": ["SQL", "data integration", "Databricks", "regression analysis"]})
+        if "don't appear word for word" in prompt:
+            return json.dumps({"claims": [
+                {"term": "data integration", "kind": "skill", "entry": "E1", "evidence": "validate ledger data across 5 source systems"},
+                {"term": "Databricks", "kind": "tool", "entry": "E1", "evidence": "Wrote SQL queries to validate ledger data"},
+                {"term": "regression analysis", "kind": "skill", "entry": "P2", "evidence": "a sentence that is not in the resume"}]})
+        return self.reply if "Return JSON only" in prompt else ""
+
+
+def test_evidence_claims_need_a_real_quote_and_never_name_a_tool():
+    c = ResumeComposer(BASE, EvidenceLLM(draft_reply()))
+    c.draft("Analyst: SQL, data integration, Databricks, regression analysis")
+    assert set(c.claims) == {"data integration"}  # Databricks is a tool; the regression quote isn't real
+    assert c.claims["data integration"][0] == "E1"
