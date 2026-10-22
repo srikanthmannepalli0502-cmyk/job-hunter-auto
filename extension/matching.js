@@ -102,8 +102,28 @@
   const booleanOption = (text) => /^(yes|true|y)$/.test(norm(text)) ? true : /^(no|false|n)$/.test(norm(text)) ? false : undefined;
   const agree = (values) => new Set(values.map((v) => binaryAnswer(v) ?? norm(v))).size === 1;
 
+  // The company's name in a question ("worked at Comcast", "relatives at Citibank") replaced by
+  // "the company", so an answer saved at one company answers the same question at the next. The
+  // server does the same to questions it saves.
+  const SUFFIX = /[,.]?\s+(inc|llc|l\.l\.c|n\.a|corp|corporation|co|ltd|lp|llp|l\.p|plc|group)\.?$/i;
+  function companyNames(company) {
+    let name = (company || "").trim();
+    while (SUFFIX.test(name)) name = name.replace(SUFFIX, "").trim();
+    const first = name.split(/\s+/)[0] || "";
+    return [...new Set([name, first.length >= 4 ? first : ""].filter((n) => n.length >= 3))];
+  }
+  function generalize(text, company) {
+    let t = text || "";
+    for (const n of companyNames(company)) {
+      t = t.replace(new RegExp(`\\b${n.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}\\b`, "gi"), "the company");
+    }
+    return t;
+  }
+
   // A saved answer for this question: {status: "matched", value} | {status: "conflict"} | {status: "unmatched"}.
-  function savedAnswer(label, answers) {
+  function savedAnswer(label, answers, company = "") {
+    label = generalize(label, company);
+    answers = answers.map((a) => ({ ...a, question: generalize(a.question, company) }));
     const key = questionKey(label);
     const same = answers.filter((a) => (a.answer || "").trim() && questionKey(a.question) === key).map((a) => a.answer);
     if (same.length) return agree(same) ? { status: "matched", value: same[0] } : { status: "conflict" };
@@ -122,7 +142,7 @@
   // | {status: "yours"} (a fail-closed question nothing answers exactly) | {status: "none"}.
   function answerFor(label, ctx) {
     if (!label) return { status: "none" };
-    const saved = savedAnswer(label, ctx.answers || []);
+    const saved = savedAnswer(label, ctx.answers || [], ctx.job?.company || "");
     if (saved.status === "matched") return { status: "matched", value: saved.value, from: "saved answer" };
     if (saved.status === "conflict") return saved;
     const l = norm(label);
@@ -177,7 +197,40 @@
     return best >= 0.5 ? pick((t, i) => scores[i] === best) : { status: "unmatched" };
   }
 
-  const api = { norm, questionKey, topic, savedAnswer, answerFor, resolveOption, binaryAnswer, PLACEHOLDER };
+  // Answers that follow from what Job Hunter already knows, for questions nothing saved answers:
+  // where it found the job, whether the company is in your work history, your phone type.
+  // Candidates are tried in order through resolveOption; an ambiguous one is skipped, never guessed.
+  // Never for fail-closed topics. {values: [...], from} | null.
+  const HEARD = /\bhow did you (first |initially )?(hear|learn|find out)\b|\breferral source\b|^(source|candidate source|how did you hear)$/;
+  const BEFORE = /\b(currently|previously|ever|before|formerly|in the past)\b/;
+  const EMPLOYED = /\b(work|worked|working|employed|employee|employment|contractor|consultant|intern)\b/;
+  const RELATED = /\b(relative|relatives|related|spouse|partner|family member|referred|referral|know anyone)\b/;
+  function derived(label, ctx) {
+    if (!label || topic(label)) return null;
+    const job = ctx.job || {};
+    const l = norm(generalize(label, job.company));
+    const short = companyNames(job.company)[0] || "";
+    if (HEARD.test(l) || questionKey(label) === questionKey("How did you hear about us?")) {
+      const via = job.found_via || {};
+      const values = via.kind === "company_site"
+        ? ["Company Website", "Company Career Site", "Career Site", "Careers Website", "Careers Page",
+           `${short} Careers`, `${short} Careers Website`, `${short} Jobs Career Site`, `${short} Website`,
+           "Corporate Website", "Website", "Internet"]
+        : via.name ? [via.name, "Job Board", "Online Job Board", "Internet"] : [];
+      return values.length ? { values, from: "where Job Hunter found this job" } : null;
+    }
+    if (BEFORE.test(l) && EMPLOYED.test(l) && !RELATED.test(l) && /\bthe company\b|\bus\b/.test(l)) {
+      const mine = (ctx.history?.jobs || []).map((j) => norm(generalize(j.company, job.company)));
+      return { values: [mine.some((c) => c.includes("the company")) ? "Yes" : "No"], from: "your work history" };
+    }
+    if (/\bphone (device )?type\b|\btype of phone\b/.test(l)) {
+      return { values: ["Mobile", "Cell", "Cell Phone", "Mobile Phone"], from: "your phone (mobile)" };
+    }
+    return null;
+  }
+
+  const api = { norm, questionKey, topic, savedAnswer, answerFor, resolveOption, binaryAnswer, PLACEHOLDER,
+                generalize, derived };
   globalThis.__jobHunterMatch = api;
   if (typeof module === "object" && module.exports) module.exports = api;
 })();

@@ -111,7 +111,7 @@ $("collect").addEventListener("click", async () => {
     `<button id="saveChosen" class="primary">Save selected</button>`;
   $("saveChosen").addEventListener("click", async () => {
     const chosen = [...document.querySelectorAll("#collectResult input:checked")].map((c) => items[+c.dataset.n]);
-    const r = await api("/api/x/answers", { method: "POST", body: { items: chosen } });
+    const r = await api("/api/x/answers", { method: "POST", body: { items: chosen, job_id: ctx?.job?.id || null } });
     $("collectResult").innerHTML = `<span class="ok">Saved ${r.saved} answer(s).</span>`;
     await refresh();
   });

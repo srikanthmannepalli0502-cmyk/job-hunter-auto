@@ -100,3 +100,37 @@ test("country names and placeholders", () => {
   assert.equal(option(["Select One", "Mobile", "Landline"], "Mobile"), "Mobile");
   assert.equal(option(["Select One", "Master's Degree", "Bachelor's Degree"], "Master of Science", "Highest degree earned"), "Master's Degree");
 });
+
+// Derived answers and company-generalised saved answers.
+const job = { company: "Comcast Cable Communications, LLC", found_via: { kind: "company_site", name: "Comcast Cable Communications" } };
+const history = { jobs: [{ company: "Syracuse University iSchool" }, { company: "Tata Consultancy Services" }] };
+const withJob = (answers = []) => ({ fields: FIELDS, answers, job, history });
+
+test("'How did you hear about us?' comes from where Job Hunter found the job", () => {
+  const d = M.derived("How Did You Hear About Us?*", withJob());
+  assert.equal(d.from, "where Job Hunter found this job");
+  const opts = ["Select One", "Comcast Careers Website", "Employee Referral", "LinkedIn"];
+  const first = d.values.find((v) => M.resolveOption(opts, v).status === "matched");
+  assert.equal(opts[M.resolveOption(opts, first).index], "Comcast Careers Website");
+});
+
+test("an ambiguous candidate is not settled by picking the first option", () => {
+  const opts = ["Company Website - Careers", "Company Website - Blog"];
+  assert.equal(M.resolveOption(opts, "Company Website").status, "ambiguous");
+});
+
+test("'worked at the company before?' is No unless the company is in your work history", () => {
+  const q = "Do you currently work or have you previously worked as a full/part time employee or as a contractor of Comcast or any Company within the Comcast Family?*";
+  assert.deepEqual(M.derived(q, withJob()).values, ["No"]);
+  const tcs = { ...withJob(), job: { company: "Tata Consultancy Services Limited" } };
+  assert.deepEqual(M.derived("Have you ever worked for Tata Consultancy Services before?", tcs).values, ["Yes"]);
+  assert.equal(M.derived("Do you have relatives currently working at Comcast?", withJob()), null);
+  assert.equal(M.derived("Will you now or in the future require sponsorship?", withJob()), null); // fail-closed
+});
+
+test("a saved answer about one company answers the same question at another", () => {
+  const saved = [{ question: "Do you have any relatives currently working for the company?", answer: "No" }];
+  const r = M.answerFor("Do you have any relatives currently working for Comcast?", withJob(saved));
+  assert.equal(r.status, "matched");
+  assert.equal(r.value, "No");
+});

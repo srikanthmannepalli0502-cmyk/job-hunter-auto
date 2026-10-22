@@ -701,7 +701,7 @@ def make_handler(app: App, port: int):
 
         # ---- API for the Chrome extension (X-Extension-Key)
         def api_extension(self, method: str, path: str, params: dict):
-            from jobhunter.answers import EXCLUDE, FIELDS, SENSITIVE, work_history
+            from jobhunter.answers import EXCLUDE, FIELDS, SENSITIVE, found_via, generalize, work_history
 
             key = app.tracker.setting("extension_key")
             if not key or not hmac.compare_digest(self.headers.get("X-Extension-Key", ""), key):
@@ -724,6 +724,7 @@ def make_handler(app: App, port: int):
                             "decision": job.decision, "has_resume": bool(job.kit_resume_path),
                             "has_cover": bool(job.kit_cover_path),
                             "resume_version": Path(job.kit_resume_path).name if job.kit_resume_path else "",
+                            "found_via": found_via(job.source or "", job.company),
                             "status": app.worker.status.get(job.id, ""),
                             "notes": (job.kit_notes or "").splitlines()},
                         "fields": [{"key": k, "label": label, "keywords": kw, "exclude": EXCLUDE.get(k, []),
@@ -745,8 +746,11 @@ def make_handler(app: App, port: int):
                                      extra={"X-Filename": app.upload_name(parts[0], path_ok.suffix)})
                 if method == "POST" and parts == ["answers"]:
                     saved = 0
+                    on_job = app.tracker.get_job(int(data["job_id"])) if str(data.get("job_id") or "").isdigit() else None
                     for item in data.get("items", [])[:100]:
                         q, a = str(item.get("question", "")), str(item.get("answer", ""))
+                        if on_job is not None:  # "worked at Comcast?" is saved as "worked at the company?"
+                            q = generalize(q, on_job.company)
                         if q.strip() and a.strip() and not SENSITIVE.search(q):
                             app.tracker.save_answer(q[:500], a[:5000])
                             saved += 1

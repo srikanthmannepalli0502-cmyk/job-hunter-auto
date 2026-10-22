@@ -52,6 +52,35 @@ EXCLUDE = {
 }
 
 
+_SUFFIX = re.compile(r"[,.]?\s+(inc|llc|l\.l\.c|n\.a|corp|corporation|co|ltd|lp|llp|l\.p|plc|group)\.?$", re.I)
+JOB_BOARD_SOURCES = {"greenhouse", "lever", "ashby", "workday", "oracle", "smartrecruiters", "amazon"}
+
+
+def company_names(company: str) -> list[str]:
+    """'Comcast Cable Communications, LLC' -> ['Comcast Cable Communications', 'Comcast'] (as matching.js does)."""
+    name = (company or "").strip()
+    while _SUFFIX.search(name):
+        name = _SUFFIX.sub("", name).strip()
+    first = name.split()[0] if name.split() else ""
+    return [n for n in dict.fromkeys([name, first if len(first) >= 4 else ""]) if len(n) >= 3]
+
+
+def generalize(question: str, company: str) -> str:
+    """The company's name in a question replaced by 'the company', so a saved answer to "Have you
+    worked at Comcast before?" also answers it at the next company."""
+    for n in company_names(company):
+        question = re.sub(rf"\b{re.escape(n)}\b", "the company", question, flags=re.I)
+    return question
+
+
+def found_via(source: str, company: str) -> dict:
+    """Where Job Hunter found a job, for "How did you hear about us?"."""
+    if source in JOB_BOARD_SOURCES:
+        return {"kind": "company_site", "name": (company_names(company) or [company])[0]}
+    names = {"hackernews": "Hacker News", "remotive": "Remotive", "adzuna": "Adzuna"}
+    return {"kind": "job_board", "name": names.get(source, source.title())}
+
+
 def work_history(resume_text: str) -> dict:
     """Jobs and education from the master resume, for forms with repeated 'Work Experience' and
     'Education' sections: [{title, company, start: 'MM/YYYY', end, current, description}]."""

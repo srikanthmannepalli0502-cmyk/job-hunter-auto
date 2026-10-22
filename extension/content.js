@@ -6,7 +6,7 @@
 // Which answer and option to use comes from matching.js (injected first). Every value is read back
 // after filling: one the page didn't keep is reported as skipped, not filled.
 (() => {
-  const VERSION = 3;
+  const VERSION = 4;
   if (window.__jobHunterApi && window.__jobHunterApi.version >= VERSION) return;
   const M = window.__jobHunterMatch;
   if (!M) throw new Error("Job Hunter: matching.js must be injected before content.js");
@@ -171,6 +171,51 @@
     return { text: r.option.text };
   }
 
+  // The first of several candidate answers (a derived answer's synonyms) that resolves to exactly
+  // one option; an ambiguous candidate is skipped, never settled by picking the first.
+  function pickAny(options, values, label) {
+    let reason = "unmatched";
+    for (const v of values) {
+      const r = pickOption(options, v, label);
+      if (r.option) return { ...r, value: v };
+      if (r.reason === "ambiguous") reason = "ambiguous";
+    }
+    return { reason };
+  }
+
+  async function chooseFromButtonAny(btn, values, label) {
+    const before = new Set(optionEls());
+    press(btn);
+    const r = pickAny(await waitForOptions(2000, before), values, label);
+    if (r.option) { press(r.option.el); await sleep(300); return { text: r.option.text }; }
+    key(document.activeElement || btn, "Escape");
+    return r;
+  }
+
+  // A search-and-pick box with candidate answers: search a few short words ("career", "website")
+  // and take the first candidate that matches exactly one result.
+  async function chooseFromPromptAny(input, values, label) {
+    const words = [...new Set(values.flatMap((v) => M.norm(v).split(" ")).filter((w) => w.length >= 4))].slice(0, 4);
+    let reason = "unmatched";
+    for (const word of words) {
+      const before = new Set(optionEls());
+      input.focus();
+      setValue(input, word);
+      key(input, "Enter");
+      await sleep(400);
+      const r = pickAny(await waitForOptions(2500, before), values, label);
+      if (r.option) {
+        press(r.option.el);
+        await sleep(500);
+        if (hasSelection(input)) return { text: r.option.text };
+      } else if (r.reason === "ambiguous") reason = "ambiguous";
+      setValue(input, "");
+      key(input, "Escape");
+      await sleep(200);
+    }
+    return { reason };
+  }
+
   // Why a question was left for you, shown in the side panel.
   function why(label, status, value) {
     if (status === "conflict") return `${label} (your saved answers disagree)`;
@@ -246,11 +291,13 @@
         const group = el.name ? [...document.getElementsByName(el.name)] : [el];
         if (group.some((r) => r.checked)) continue;
         const ans = answer(label);
-        if (ans.status !== "matched") { if (label) skipped.push(why(label, ans.status)); continue; }
-        const r = pickOption(group.map((g) => ({ el: g, text: optionText(g) })), ans.value, label);
-        if (!r.option) { skipped.push(why(label, r.reason, ans.value)); continue; }
+        const d = ans.status === "none" ? M.derived(label, ctx) : null; // "worked here before?" etc.
+        if (ans.status !== "matched" && !d) { if (label) skipped.push(why(label, ans.status)); continue; }
+        const opts = group.map((g) => ({ el: g, text: optionText(g) }));
+        const r = d ? pickAny(opts, d.values, label) : pickOption(opts, ans.value, label);
+        if (!r.option) { skipped.push(why(label, r.reason, d ? d.values[0] : ans.value)); continue; }
         r.option.el.click();
-        note(label, r.option.text, ans.from, () => r.option.el.checked);
+        note(label, r.option.text, d ? d.from : ans.from, () => r.option.el.checked);
         continue;
       }
       if (type === "checkbox") continue; // consent and preference boxes are yours to tick
@@ -258,14 +305,22 @@
       if (isListButton(el)) {
         if (!PLACEHOLDER.test(clean(el.innerText))) continue; // already chosen
         const ans = answer(label);
-        if (ans.status !== "matched") { if (label) skipped.push(why(label, ans.status)); continue; }
-        const r = await chooseFromButton(el, ans.value, label);
-        if (r.text) note(label, r.text, ans.from, () => sameText(el.innerText, r.text));
-        else skipped.push(why(label, r.reason, ans.value));
+        const d = ans.status === "none" ? M.derived(label, ctx) : null;
+        if (ans.status !== "matched" && !d) { if (label) skipped.push(why(label, ans.status)); continue; }
+        const r = d ? await chooseFromButtonAny(el, d.values, label) : await chooseFromButton(el, ans.value, label);
+        if (r.text) note(label, r.text, d ? d.from : ans.from, () => sameText(el.innerText, r.text));
+        else skipped.push(why(label, r.reason, d ? d.values[0] : ans.value));
         continue;
       }
       if (hasSelection(el) || hasValue(el)) continue; // never overwrite what's there
       const ans = answer(label);
+      const d = ans.status === "none" && isPrompt(el) ? M.derived(label, ctx) : null; // "how did you hear"
+      if (d) {
+        const r = await chooseFromPromptAny(el, d.values, label);
+        if (r.text) note(label, r.text, d.from, () => selectedItems(el).some((li) => sameText(li.innerText, r.text)));
+        else skipped.push(r.reason === "ambiguous" ? why(label, r.reason, d.values[0]) : `${label} (pick it from the list)`);
+        continue;
+      }
       if (ans.status !== "matched") { if (label) skipped.push(why(label, ans.status)); continue; }
       if (isPrompt(el)) {
         const r = await chooseFromPrompt(el, ans.value, label);
