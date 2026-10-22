@@ -83,6 +83,10 @@ class Profile:
     scoring: ScoringConfig = field(default_factory=ScoringConfig)
     sponsorship: SponsorshipConfig = field(default_factory=SponsorshipConfig)
     boards: BoardsConfig = field(default_factory=BoardsConfig)
+    # Linked in outreach messages: your portfolio and a live project that shows your work.
+    portfolio_url: str = ""
+    dashboard_url: str = ""
+    school: str = ""
 
 
 def load_profile(path: Path = DEFAULT_PROFILE_PATH) -> Profile:
@@ -102,6 +106,9 @@ def load_profile(path: Path = DEFAULT_PROFILE_PATH) -> Profile:
         # JOBHUNTER_OUTPUT_DIR overrides it, e.g. persistent storage when hosted.
         output_dir=os.getenv("JOBHUNTER_OUTPUT_DIR") or candidate.get("output_dir", "resumes/tailored"),
         must_keep=candidate.get("must_keep", []),
+        portfolio_url=candidate.get("portfolio_url", ""),
+        dashboard_url=candidate.get("dashboard_url", ""),
+        school=candidate.get("school", ""),
         search=SearchConfig(**data.get("search", {})),
         scoring=ScoringConfig(
             keywords=scoring.get("keywords", {}),

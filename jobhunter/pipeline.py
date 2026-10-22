@@ -163,6 +163,50 @@ def save_edited_resume(profile: Profile, tracker: Tracker, job_id: int, text: st
     return path, notes
 
 
+def company_fact(profile: Profile, company: str) -> str:
+    """One sentence about the company's H-1B record, from your sponsor data ('' if none)."""
+    from jobhunter.outreach import company_insight
+
+    return company_insight(_sponsors(profile.sponsorship.data_file), company, profile.sponsorship.roles)[0]
+
+
+_SPONSOR_CACHE: dict = {}
+
+
+def _sponsors(path: str):
+    """The sponsor data, loaded once per process (30,000 rows; job pages ask for it every view)."""
+    if path not in _SPONSOR_CACHE:
+        _SPONSOR_CACHE[path] = SponsorDB.load(path)
+    return _SPONSOR_CACHE[path]
+
+
+def make_outreach(profile: Profile, tracker: Tracker, job_id: int, llm=None) -> dict:
+    """Drafts of a referral ask (alum), a recruiter note and a hiring-manager note for one job;
+    saved on the job. You send them yourself."""
+    from jobhunter.llm import LLMClient
+    from jobhunter.outreach import draft_messages
+    from jobhunter.resume.parser import parse_resume
+
+    job = tracker.get_job(job_id)
+    if job is None:
+        raise ValueError(f"No job with id {job_id}")
+    resume = resume_text_for(job) or parse_resume(profile.base_resume) or ""
+    # The results that match this job best: bullets with a number, ranked by the job's terms they share.
+    from jobhunter.resume import ats
+
+    wanted = ats.terms_in(f"{job.title}\n{job.description or ''}")
+    bullets = [line[2:] for line in resume.splitlines() if line.startswith("- ") and re.search(r"\d", line)]
+    bullets.sort(key=lambda b: len(ats.terms_in(b) & wanted), reverse=True)
+    summary = next((l for l in resume.split("SUMMARY", 1)[-1].splitlines() if l.strip()), "")
+    drafts = draft_messages(
+        llm or LLMClient(), title=job.title, company=job.company, url=job.job_url or "",
+        name=profile.name, headline=summary[:300], highlights=" | ".join(bullets[:6]),
+        insight=company_fact(profile, job.company), dashboard=profile.dashboard_url,
+        portfolio=profile.portfolio_url, school=profile.school or "my university", resume=resume)
+    tracker.set_outreach(job_id, drafts)
+    return drafts
+
+
 def resume_text_for(job) -> str:
     """The text of a job's tailored resume (saved next to its PDF), or '' for older resumes."""
     if not job or not job.kit_resume_path:

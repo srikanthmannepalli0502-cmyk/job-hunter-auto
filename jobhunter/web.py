@@ -100,6 +100,12 @@ class KitWorker:
             job_id, what = self.jobs.get()
             self.status[job_id] = "generating"
             try:
+                if what == "outreach":
+                    from jobhunter.pipeline import make_outreach
+
+                    drafts = make_outreach(self.app.profile, self.app.tracker, job_id)
+                    self.status[job_id] = "Outreach drafts ready." if drafts else "failed: no drafts passed the checks"
+                    continue
                 if what == "cover":
                     ok = make_cover_note(self.app.profile, self.app.tracker, job_id)
                     self.status[job_id] = "Cover note ready." if ok else "failed: the LLM returned nothing"
@@ -258,8 +264,37 @@ class App:
             f"<div class='row'>{self.people_links(j.company, j.title)} "
             "<span class='muted'>(a referral or a note to the recruiter beats applying cold)</span></div>"
             f"<div class='row'>{kit_btns}</div>{files}<div class='row'>{apply_btns}</div></div>"
+            + self.outreach_card(j, busy) +
             f"<div class='card'><pre>{_e(j.description or 'No description from this source.')}</pre></div>")
         return self.page(j.title, body, "", flash, user)
+
+    def outreach_card(self, j, busy: bool) -> str:
+        """Who to contact, the company fact that makes you stand out, and message drafts to copy."""
+        import json as _json
+
+        from jobhunter.pipeline import company_fact
+
+        fact = company_fact(self.profile, j.company)
+        drafts = _json.loads(j.outreach) if j.outreach else {}
+        names = (("alumni", "Syracuse alum (LinkedIn connection note)"), ("recruiter", "Recruiter"),
+                 ("hiring_manager", "Hiring manager"))
+        blocks = ""
+        for key, label in names:
+            if drafts.get(key):
+                n = len(drafts[key])
+                blocks += (f"<div style='margin-top:10px'><b>{label}</b> <span class='muted'>({n} characters)</span>"
+                           f"<textarea rows='5' style='width:100%' id='o_{key}'>{_e(drafts[key])}</textarea>"
+                           f"<button onclick=\"navigator.clipboard.writeText(document.getElementById('o_{key}').value);"
+                           f"this.textContent='Copied'\">Copy</button></div>")
+        if drafts.get("subject"):
+            blocks += f"<p class='muted'>Email subject: <b>{_e(drafts['subject'])}</b></p>"
+        button = (f"<form class='inline' method='post' action='/outreach/{j.id}'><button{' disabled' if busy else ''}>"
+                  f"{'Rewrite' if drafts else 'Write'} outreach messages</button></form>")
+        return ("<div class='card' id='outreach'><h3 style='margin-top:0'>Reach out</h3>"
+                "<p class='muted'>A referral or a short note to the right person gets far more replies than an "
+                "application alone. You send these yourself; edit them first.</p>"
+                + (f"<p><b>Company fact for your note</b> (from your H-1B data): {_e(fact)}</p>" if fact else "")
+                + f"<div class='row'>{self.people_links(j.company, j.title)}</div>{button}{blocks}</div>")
 
     def edit_page(self, job_id: int, flash: str = "", user: str = "") -> str:
         from jobhunter.pipeline import resume_text_for
@@ -622,6 +657,9 @@ def make_handler(app: App, port: int):
             if len(parts) == 3 and parts[:2] == ["feedback", "clear"] and parts[2].isdigit():
                 app.tracker.clear_feedback(int(parts[2]))
                 return self.redirect(f"/job/{parts[2]}?msg=" + quote("Requests cleared."))
+            if len(parts) == 2 and parts[0] == "outreach" and parts[1].isdigit():
+                app.worker.submit(int(parts[1]), "outreach")
+                return self.redirect(f"/job/{parts[1]}?msg=" + quote("Writing outreach messages; refresh in a minute.") + "#outreach")
             if len(parts) == 2 and parts[0] == "revise" and parts[1].isdigit():
                 app.tracker.add_feedback(int(parts[1]), form.get("feedback", ""))
                 app.worker.submit(int(parts[1]), "resume")
