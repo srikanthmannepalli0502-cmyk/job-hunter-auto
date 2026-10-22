@@ -10,7 +10,7 @@ async function activeTab() {
 
 // Run one of content.js's helpers in every frame of the page and return the frames' results.
 async function inPage(name, arg) {
-  await chrome.scripting.executeScript({ target: { tabId: tab.id, allFrames: true }, files: ["content.js"] });
+  await chrome.scripting.executeScript({ target: { tabId: tab.id, allFrames: true }, files: ["matching.js", "content.js"] });
   const results = await chrome.scripting.executeScript({
     target: { tabId: tab.id, allFrames: true },
     func: (n, a) => (window.__jobHunterApi ? window.__jobHunterApi[n](a) : null),

@@ -267,6 +267,13 @@ pytest
 
 The tests mock the job APIs and the LLM, so they need no keys or network access.
 
+The extension's form filling has its own tests (Node 22+; the fill test uses headless Chrome and is
+skipped without it):
+
+```bash
+node --test "extension/test/*.test.js"
+```
+
 ## Responsible use
 
 - Job data comes only from official APIs, used within their terms. Remotive asks API users to

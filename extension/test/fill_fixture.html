@@ -1,0 +1,82 @@
+<!doctype html>
+<html>
+<head>
+<meta charset="utf-8">
+<title>Fail-closed fill fixture (extension test)</title>
+</head>
+<body>
+<!-- Opened by fill.test.js with ?run: fills the form with CTX and writes the result into #result. -->
+<label for="fn">First Name*</label><input id="fn" type="text">
+
+<!-- Like a React field whose state never took the typed value: the page clears it again. -->
+<label for="ln">Last Name*</label><input id="ln" type="text">
+
+<fieldset><legend>Do you currently require visa sponsorship?</legend>
+  <input type="radio" name="now" id="nowY" value="y"><label for="nowY">Yes</label>
+  <input type="radio" name="now" id="nowN" value="n"><label for="nowN">No</label>
+</fieldset>
+
+<fieldset><legend>Will you, now or in the future, require sponsorship for employment?</legend>
+  <input type="radio" name="spons" id="sY" value="y"><label for="sY">Yes, but only an H-1B transfer</label>
+  <input type="radio" name="spons" id="sN" value="n"><label for="sN">No</label>
+</fieldset>
+
+<fieldset><legend>Would you be willing to relocate?</legend>
+  <input type="radio" name="rel" id="rY" value="y"><label for="rY">Yes</label>
+  <input type="radio" name="rel" id="rN" value="n"><label for="rN">No</label>
+</fieldset>
+
+<label for="src">How did you hear about us?</label>
+<select id="src"><option>Select One</option><option>LinkedIn Job Post</option><option>LinkedIn Referral</option><option>Indeed</option></select>
+
+<label for="ctry">Country</label>
+<select id="ctry"><option>Select One</option><option>Canada</option><option>United States of America</option></select>
+
+<div data-automation-id="formField-q1">
+  <label for="auth">Are you legally authorized to work in the United States?*</label>
+  <button id="auth" type="button" aria-haspopup="listbox" data-options="Yes|No">Select One</button>
+</div>
+
+<pre id="result"></pre>
+
+<script>
+document.getElementById("ln").addEventListener("input", (e) => setTimeout(() => { e.target.value = ""; }, 100));
+document.querySelectorAll("button[aria-haspopup=listbox]").forEach((btn) => btn.addEventListener("click", () => {
+  const ul = document.createElement("ul");
+  ul.setAttribute("role", "listbox");
+  for (const text of btn.dataset.options.split("|")) {
+    const li = document.createElement("li");
+    li.setAttribute("role", "option"); li.textContent = text;
+    li.addEventListener("click", () => { btn.textContent = text; ul.remove(); });
+    ul.appendChild(li);
+  }
+  setTimeout(() => btn.after(ul), 100);
+}));
+</script>
+<script src="../matching.js"></script>
+<script src="../content.js"></script>
+<script>
+const CTX = {
+  sensitive: "social security|passport",
+  fields: [
+    { key: "first_name", label: "First name", keywords: ["first name"], value: "Sam", exclude: [] },
+    { key: "last_name", label: "Last name", keywords: ["last name"], value: "Doe", exclude: [] },
+    { key: "country", label: "Country", keywords: ["country"], value: "USA", exclude: ["phone", "code"] },
+    { key: "needs_sponsorship", label: "Needs sponsorship", keywords: ["sponsorship", "sponsor"], value: "Yes", exclude: [] },
+    { key: "work_authorized", label: "Authorized to work", keywords: ["authorized to work"], value: "Yes", exclude: [] },
+  ],
+  answers: [
+    { question: "How did you hear about this job?", answer: "LinkedIn" },
+    { question: "Are you willing to relocate?", answer: "Yes" },
+    { question: "Are you open to relocation?", answer: "No" },
+  ],
+  history: { jobs: [] },
+};
+if (location.search.includes("run")) {
+  window.__jobHunterApi.fill(CTX).then(
+    (r) => { document.getElementById("result").textContent = JSON.stringify(r); },
+    (e) => { document.getElementById("result").textContent = JSON.stringify({ error: String(e) }); });
+}
+</script>
+</body>
+</html>

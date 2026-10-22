@@ -3,11 +3,14 @@
 // can save it. It never submits the form, and never touches fields that look sensitive.
 // Besides plain inputs it handles Workday's widgets: button dropdowns, search-and-pick boxes,
 // Yes/No questions labelled by their field wrapper, and numbered Work Experience / Websites sections.
+// Which answer and option to use comes from matching.js (injected first). Every value is read back
+// after filling: one the page didn't keep is reported as skipped, not filled.
 (() => {
-  const VERSION = 2;
+  const VERSION = 3;
   if (window.__jobHunterApi && window.__jobHunterApi.version >= VERSION) return;
+  const M = window.__jobHunterMatch;
+  if (!M) throw new Error("Job Hunter: matching.js must be injected before content.js");
 
-  const norm = (s) => (s || "").toLowerCase().replace(/[^a-z0-9 ]+/g, " ").replace(/\s+/g, " ").trim();
   const visible = (el) => !!(el.offsetWidth || el.offsetHeight || el.getClientRects().length);
   const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
   const clean = (s) => (s || "").replace(/\s+/g, " ").replace(/\*/g, "").trim().slice(0, 300);
@@ -118,30 +121,16 @@
     }
   }
 
-  function similarity(a, b) {
-    const A = new Set(norm(a).split(" ").filter((w) => w.length > 2));
-    const B = new Set(norm(b).split(" ").filter((w) => w.length > 2));
-    if (!A.size || !B.size) return 0;
-    let both = 0;
-    for (const w of A) if (B.has(w)) both++;
-    return both / Math.max(A.size, B.size);
-  }
+  // Options already on the page before a list opens (Workday marks the chosen "United States of
+  // America (+1)" in Country Phone Code as an option too) don't count as the list having opened.
+  const optionEls = () => [...document.querySelectorAll('[role="option"], [data-automation-id="promptOption"]')]
+    .filter((el) => visible(el) && !el.closest('[data-automation-id="selectedItemList"]'));
 
-  // The option that best matches an answer ("YES" -> "Yes"); nothing if no option is close.
-  function bestOption(options, answer) {
-    const a = norm(answer);
-    if (!a) return null;
-    const by = (f) => options.find((o) => f(norm(o.text)));
-    return by((t) => t === a) || by((t) => t.startsWith(a + " ")) ||
-      (a.length > 3 ? by((t) => t.includes(a)) : null) ||
-      options.map((o) => [o, similarity(o.text, answer)]).filter(([, s]) => s >= 0.5).sort((x, y) => y[1] - x[1])[0]?.[0] || null;
-  }
-
-  async function waitForOptions(ms) {
+  async function waitForOptions(ms, before = new Set()) {
     const end = Date.now() + ms;
     while (Date.now() < end) {
-      const opts = [...document.querySelectorAll('[role="option"], [data-automation-id="promptOption"]')]
-        .filter(visible).map((el) => ({ el, text: clean(el.innerText || el.getAttribute("aria-label") || "") }))
+      const opts = optionEls().filter((el) => !before.has(el))
+        .map((el) => ({ el, text: clean(el.innerText || el.getAttribute("aria-label") || "") }))
         .filter((o) => o.text);
       if (opts.length) return opts;
       await sleep(150);
@@ -149,53 +138,53 @@
     return [];
   }
 
+  // The option an answer means, or why there isn't one ("ambiguous" / "unmatched").
+  function pickOption(options, answer, label) {
+    const r = M.resolveOption(options.map((o) => o.text), answer, label);
+    return r.status === "matched" ? { option: options[r.index] } : { reason: r.status };
+  }
+
   // Workday button dropdown: open it, click the matching option.
-  async function chooseFromButton(btn, answer) {
+  async function chooseFromButton(btn, answer, label) {
+    const before = new Set(optionEls());
     press(btn);
-    const opt = bestOption(await waitForOptions(2000), answer);
-    if (opt) { press(opt.el); await sleep(300); return !PLACEHOLDER.test(clean(btn.innerText)); }
+    const r = pickOption(await waitForOptions(2000, before), answer, label);
+    if (r.option) { press(r.option.el); await sleep(300); return { text: r.option.text }; }
     key(document.activeElement || btn, "Escape");
-    return false;
+    return r;
   }
 
   // Workday search-and-pick box: type, search, click the matching result; leave no stray text.
-  async function chooseFromPrompt(input, answer) {
+  async function chooseFromPrompt(input, answer, label) {
+    const before = new Set(optionEls());
     input.focus();
     setValue(input, answer);
     key(input, "Enter");
     await sleep(400);
-    const opt = bestOption(await waitForOptions(3000), answer);
-    if (opt) { press(opt.el); await sleep(500); }
+    const r = pickOption(await waitForOptions(3000, before), answer, label);
+    if (r.option) { press(r.option.el); await sleep(500); }
     if (!hasSelection(input)) {
       setValue(input, "");
       key(input, "Escape");
-      return false;
+      return { reason: r.reason || "unmatched" };
     }
-    return true;
+    return { text: r.option.text };
   }
 
-  // The answer for a question: a saved answer to (nearly) the same question, else a profile field.
-  function answerFor(label, ctx, sensitive) {
-    if (!label || sensitive.test(label)) return null;
-    let best = null, bestScore = 0;
-    for (const a of ctx.answers) {
-      const s = norm(a.question) === norm(label) ? 1 : similarity(a.question, label);
-      if (s > bestScore) { best = a.answer; bestScore = s; }
-    }
-    if (bestScore >= 0.75) return { value: best, from: "saved answer" };
-    const l = norm(label);
-    const words = new Set(l.split(" "));
-    let field = null, fieldLen = 0;
-    for (const f of ctx.fields) {
-      // "Phone Extension" is not your phone; "Country Phone Code" is not your country.
-      if ((f.exclude || []).some((x) => (x.includes(" ") ? l.includes(x) : words.has(x)))) continue;
-      for (const kw of f.keywords) {
-        if (l.includes(norm(kw)) && kw.length > fieldLen) { field = f; fieldLen = kw.length; }
-      }
-    }
-    if (!field && /^(your )?name$/.test(l)) field = ctx.fields.find((f) => f.key === "full_name");
-    return field ? { value: field.value, from: field.label } : null;
+  // Why a question was left for you, shown in the side panel.
+  function why(label, status, value) {
+    if (status === "conflict") return `${label} (your saved answers disagree)`;
+    if (status === "yours") return `${label} (answer this one yourself)`;
+    if (status === "ambiguous") return `${label} (more than one option fits "${value}")`;
+    if (status === "unmatched") return `${label} (no option like "${value}")`;
+    if (status === "dropped") return `${label} (the page didn't keep "${value}")`;
+    return label;
   }
+  const sameText = (a, b) => clean(a).toLowerCase() === clean(b).toLowerCase();
+  // A <select> still on "Select One" is empty even when that option has no value="" of its own.
+  const hasValue = (el) => el.tagName === "SELECT"
+    ? el.selectedIndex >= 0 && !!el.value.trim() && !PLACEHOLDER.test(clean(el.options[el.selectedIndex].text))
+    : !!(el.value || "").trim();
 
   // Values for numbered sections, from your master resume and profile. undefined = use the normal rules.
   function sectionValue(sec, el, ctx) {
@@ -224,9 +213,11 @@
 
   async function fill(ctx) {
     const sensitive = new RegExp(ctx.sensitive, "i");
-    const filled = [], skipped = [];
+    const done = [], skipped = [];
     const doneRadio = new Set();
-    const note = (label, value, from) => filled.push({ label, value: String(value).replace(/\s+/g, " ").slice(0, 80), from });
+    // `kept` reads the field back; it runs once the page has had a moment to re-render.
+    const note = (label, value, from, kept, el) => done.push({ label, value: String(value), from, kept, el });
+    const answer = (label) => (sensitive.test(label) ? { status: "none" } : M.answerFor(label, ctx));
     for (const el of controls()) {
       const type = (el.type || "").toLowerCase();
       if (type === "file") continue;
@@ -240,10 +231,10 @@
         if (v !== undefined) {
           const where = `${sec.kind} ${sec.n}: ${label}`;
           if (type === "checkbox") {
-            if (v === "check" && !el.checked) { el.click(); note(where, "checked", "master resume"); }
+            if (v === "check" && !el.checked) { el.click(); note(where, "checked", "master resume", () => el.checked); }
           } else if (!(el.value || "").trim()) {
             setValue(el, v);
-            note(where, v, "master resume");
+            note(where, v, "master resume", () => el.isConnected && sameText(el.value, v));
           }
           continue;
         }
@@ -254,44 +245,60 @@
         doneRadio.add(el.name);
         const group = el.name ? [...document.getElementsByName(el.name)] : [el];
         if (group.some((r) => r.checked)) continue;
-        const ans = answerFor(label, ctx, sensitive);
-        if (!ans) { if (label) skipped.push(label); continue; }
-        const target = bestOption(group.map((r) => ({ el: r, text: optionText(r) })), ans.value);
-        if (target) { target.el.click(); note(label, ans.value, ans.from); }
-        else skipped.push(`${label} (no option like "${ans.value}")`);
+        const ans = answer(label);
+        if (ans.status !== "matched") { if (label) skipped.push(why(label, ans.status)); continue; }
+        const r = pickOption(group.map((g) => ({ el: g, text: optionText(g) })), ans.value, label);
+        if (!r.option) { skipped.push(why(label, r.reason, ans.value)); continue; }
+        r.option.el.click();
+        note(label, r.option.text, ans.from, () => r.option.el.checked);
         continue;
       }
       if (type === "checkbox") continue; // consent and preference boxes are yours to tick
 
       if (isListButton(el)) {
         if (!PLACEHOLDER.test(clean(el.innerText))) continue; // already chosen
-        const ans = answerFor(label, ctx, sensitive);
-        if (!ans) { if (label) skipped.push(label); continue; }
-        if (await chooseFromButton(el, ans.value)) note(label, ans.value, ans.from);
-        else skipped.push(`${label} (no option like "${ans.value}")`);
+        const ans = answer(label);
+        if (ans.status !== "matched") { if (label) skipped.push(why(label, ans.status)); continue; }
+        const r = await chooseFromButton(el, ans.value, label);
+        if (r.text) note(label, r.text, ans.from, () => sameText(el.innerText, r.text));
+        else skipped.push(why(label, r.reason, ans.value));
         continue;
       }
-      if (hasSelection(el) || (el.value || "").trim()) continue; // never overwrite what's there
-      const ans = answerFor(label, ctx, sensitive);
-      if (!ans) { if (label) skipped.push(label); continue; }
+      if (hasSelection(el) || hasValue(el)) continue; // never overwrite what's there
+      const ans = answer(label);
+      if (ans.status !== "matched") { if (label) skipped.push(why(label, ans.status)); continue; }
       if (isPrompt(el)) {
-        if (await chooseFromPrompt(el, ans.value)) note(label, ans.value, ans.from);
-        else skipped.push(`${label} (pick it from the list)`);
+        const r = await chooseFromPrompt(el, ans.value, label);
+        if (r.text) note(label, r.text, ans.from, () => selectedItems(el).some((li) => sameText(li.innerText, r.text)));
+        else skipped.push(r.reason === "ambiguous" ? why(label, r.reason, ans.value) : `${label} (pick it from the list)`);
         continue;
       }
-      const ok = el.tagName === "SELECT" ? chooseOption(el, ans.value) : (setValue(el, ans.value), true);
-      if (ok) { el.style.outline = "2px solid #2f7d4f"; note(label, ans.value, ans.from); }
-      else skipped.push(label);
+      if (el.tagName === "SELECT") {
+        const r = chooseOption(el, ans.value, label);
+        if (r.option) note(label, r.option.text, ans.from, () => el.selectedIndex === r.option.el.index, el);
+        else skipped.push(why(label, r.reason, ans.value));
+        continue;
+      }
+      setValue(el, ans.value);
+      note(label, ans.value, ans.from, () => el.isConnected && sameText(el.value, ans.value), el);
+    }
+
+    await sleep(600); // let the page re-render; React and Workday sometimes reset what was typed
+    const filled = [];
+    for (const d of done) {
+      if (!d.kept()) { skipped.push(why(d.label, "dropped", d.value.slice(0, 40))); continue; }
+      if (d.el) d.el.style.outline = "2px solid #2f7d4f";
+      filled.push({ label: d.label, value: d.value.replace(/\s+/g, " ").slice(0, 80), from: d.from });
     }
     return { filled, skipped };
   }
 
-  function chooseOption(select, answer) {
-    const opt = bestOption([...select.options].map((o) => ({ el: o, text: o.text })), answer);
-    if (!opt) return false;
-    select.value = opt.el.value;
+  function chooseOption(select, answer, label) {
+    const r = pickOption([...select.options].map((o) => ({ el: o, text: o.text })), answer, label);
+    if (!r.option) return r;
+    select.value = r.option.el.value;
     select.dispatchEvent(new Event("change", { bubbles: true }));
-    return true;
+    return r;
   }
 
   // Put a file (e.g. your tailored resume) into the page's resume / CV upload field.
