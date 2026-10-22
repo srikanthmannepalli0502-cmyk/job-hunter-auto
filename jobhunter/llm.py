@@ -2,6 +2,8 @@
 
 - Azure OpenAI (default when AZURE_OPENAI_ENDPOINT is set): signs in with your Azure identity
   (`az login`), so no API key is stored. Works with reasoning models such as gpt-5-mini.
+- Gemini: set LLM_PROVIDER=gemini and GEMINI_API_KEY (Google AI Studio). On the free tier Google
+  may use prompts to improve its products; the resume composer sends no name, phone or email.
 - Groq: set LLM_PROVIDER=groq and GROQ_API_KEY.
 """
 
@@ -52,6 +54,39 @@ class GroqClient:
         return _retry(call, "Groq")
 
 
+class GeminiClient:
+    """Google's Gemini API (generateContent over REST, so no extra package)."""
+
+    URL = "https://generativelanguage.googleapis.com/v1beta/models/{model}:generateContent"
+
+    def __init__(self, api_key: str = "", model: str = ""):
+        import httpx
+
+        self.key = api_key or settings.gemini_api_key
+        if not self.key:
+            raise RuntimeError("GEMINI_API_KEY is not set (https://aistudio.google.com/apikey)")
+        self.model = model or settings.gemini_model
+        self.http = httpx.Client(timeout=300)
+        self.reasoning_effort = "low"  # mapped to Gemini's thinking level
+
+    def generate(self, prompt: str, temperature: float = 0.4) -> str:
+        def call():
+            body = {"contents": [{"role": "user", "parts": [{"text": prompt}]}],
+                    "generationConfig": {"maxOutputTokens": 32000,
+                                         "thinkingConfig": {"thinkingLevel": self.reasoning_effort}}}
+            r = self.http.post(self.URL.format(model=self.model), json=body, headers={"x-goog-api-key": self.key})
+            if r.status_code == 400 and "thinking" in r.text.lower():  # model without thinking levels
+                body["generationConfig"].pop("thinkingConfig")
+                r = self.http.post(self.URL.format(model=self.model), json=body, headers={"x-goog-api-key": self.key})
+            if r.status_code in (429, 500, 503):  # rate limit or "model overloaded": wait and retry
+                raise RuntimeError(f"{r.status_code} rate_limit from Gemini")
+            r.raise_for_status()
+            parts = (r.json().get("candidates") or [{}])[0].get("content", {}).get("parts", [])
+            return "".join(p.get("text", "") for p in parts if not p.get("thought"))
+
+        return _retry(call, "Gemini")
+
+
 class AzureOpenAIClient:
     """Azure OpenAI with Entra ID sign-in (DefaultAzureCredential: `az login` on your PC)."""
 
@@ -83,4 +118,6 @@ class AzureOpenAIClient:
 def LLMClient():
     """The configured client: Azure OpenAI if AZURE_OPENAI_ENDPOINT is set (or LLM_PROVIDER=azure), else Groq."""
     provider = settings.llm_provider or ("azure" if settings.azure_openai_endpoint else "groq")
+    if provider == "gemini":
+        return GeminiClient()
     return AzureOpenAIClient() if provider == "azure" else GroqClient()

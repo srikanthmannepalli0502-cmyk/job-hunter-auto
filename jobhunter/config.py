@@ -16,7 +16,9 @@ DEFAULT_PROFILE_PATH = Path(os.getenv("JOBHUNTER_PROFILE", "profile.toml"))
 class Settings:
     groq_api_key: str = os.getenv("GROQ_API_KEY", "")
     groq_model: str = os.getenv("GROQ_MODEL", "llama-3.3-70b-versatile")
-    llm_provider: str = os.getenv("LLM_PROVIDER", "")  # azure or groq; default azure if its endpoint is set
+    llm_provider: str = os.getenv("LLM_PROVIDER", "")  # azure, gemini or groq; default azure if its endpoint is set
+    gemini_api_key: str = os.getenv("GEMINI_API_KEY", "")
+    gemini_model: str = os.getenv("GEMINI_MODEL", "gemini-3.8-flash")
     azure_openai_endpoint: str = os.getenv("AZURE_OPENAI_ENDPOINT", "")
     azure_openai_deployment: str = os.getenv("AZURE_OPENAI_DEPLOYMENT", "gpt-5-mini")
     azure_openai_api_version: str = os.getenv("AZURE_OPENAI_API_VERSION", "2025-04-01-preview")

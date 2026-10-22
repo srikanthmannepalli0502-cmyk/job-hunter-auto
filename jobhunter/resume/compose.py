@@ -146,7 +146,8 @@ def new_shorthand(text: str, support: str) -> list[str]:
     rewrite uses but its source never does: shorthand a recruiter would trip over."""
     known = {w.lower() for w in re.findall(r"[A-Za-z][A-Za-z0-9+#.]*", support)}
     out = [w for w in re.findall(r"\b[A-Za-z]{2,4}\b", text)
-           if w.lower() not in known and w.lower() not in _SMALL_WORDS]
+           if w.lower() not in known and w.lower() not in _SMALL_WORDS
+           and (w.isupper() or not re.search(r"[aeiouy]", w, re.I))]  # SNB, DB, pbp; not "time"
     out += [s for s in ("&", "<", ">") if s in text and s not in support]
     return list(dict.fromkeys(out))
 
@@ -234,13 +235,14 @@ class ResumeComposer:
         added = invented_words(text, support)
         shorthand = new_shorthand(text, support)
         lost = (ats.terms_in(source) & self.wanted) - ats.terms_in(text)  # e.g. dropped "regulatory reporting"
-        if not text or not (_numbers(text) <= _numbers(source)) or len(added) > 1 or shorthand or lost:
+        # numbers must be exactly the source's: none added, none dropped (a "70% faster" is the point)
+        if not text or _numbers(text) != _numbers(source) or len(added) > 1 or shorthand or lost:
             if text:
                 why = "; ".join(x for x in (
                     f"added words {added}" if len(added) > 1 else "",
                     f"shorthand {shorthand}" if shorthand else "",
                     f"dropped job terms {sorted(lost)}" if lost else "",
-                    "changed a number" if not (_numbers(text) <= _numbers(source)) else "") if x)
+                    "changed or dropped a number" if _numbers(text) != _numbers(source) else "") if x)
                 logger.info(f"{source_id}: kept the original (rewrite: {why})")
             return source
         return text
