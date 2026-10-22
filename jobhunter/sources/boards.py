@@ -437,6 +437,19 @@ def _same_company(board_name: str, employer_key: str) -> bool:
     return bool(board and brand) and board.startswith(brand)
 
 
+def _lever_is(client: httpx.Client, slug: str, employer_key: str) -> bool:
+    """A Lever board belongs to the employer when its postings mention the employer by name (Lever
+    returns no company name, and a short slug like "linkedin" can be someone else's board)."""
+    r = client.get(LEVER.format(slug=slug), params={"mode": "json", "limit": 5})
+    if r.status_code != 200 or not isinstance(r.json(), list) or not r.json():
+        return False
+    text = " ".join(" ".join(str(p.get(k, "")) for k in ("descriptionPlain", "description", "additionalPlain",
+                                                         "additional", "descriptionBodyPlain", "openingPlain", "lists"))
+                    for p in r.json()).lower()
+    brand_words = [w for w in normalize_name(employer_key).lower().split() if len(w) > 2][:2]
+    return bool(brand_words) and brand_words[0] in text
+
+
 def find_board(client: httpx.Client, employer_key: str, delay: float = 0.2) -> tuple[str, str, str] | None:
     """(ats, slug, board name) for the first public board found for this employer, or None."""
     for slug in slug_candidates(employer_key):
@@ -449,8 +462,7 @@ def find_board(client: httpx.Client, employer_key: str, delay: float = 0.2) -> t
             if r.status_code == 200 and r.json().get("jobs") is not None:
                 return "ashby", slug, slug
             time.sleep(delay)
-            r = client.get(LEVER.format(slug=slug), params={"mode": "json", "limit": 1})
-            if r.status_code == 200 and isinstance(r.json(), list):
+            if _lever_is(client, slug, employer_key):
                 return "lever", slug, slug
             time.sleep(delay)
         except (httpx.HTTPError, ValueError):
@@ -506,8 +518,7 @@ def verify_board(client: httpx.Client, ats: str, slug: str, employer_key: str) -
             name = r.json().get("name", "") if r.status_code == 200 else ""
             return name if name and _same_company(name, employer_key) else None
         if ats == "lever":
-            r = client.get(LEVER.format(slug=slug), params={"mode": "json", "limit": 1})
-            return slug if r.status_code == 200 and isinstance(r.json(), list) else None
+            return slug if _lever_is(client, slug, employer_key) else None
         if ats == "ashby":
             r = client.get(ASHBY.format(slug=slug))
             return slug if r.status_code == 200 and r.json().get("jobs") is not None else None
