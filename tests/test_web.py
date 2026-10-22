@@ -143,7 +143,7 @@ def test_extension_api(server, tmp_path):
     pdf.write_bytes(b"%PDF-1.4 test")
     app.tracker.set_kit(job.id, resume_path=str(pdf))
     r = httpx.get(f"{base}/api/x/resume/{job.id}", headers=h)
-    assert r.status_code == 200 and r.content == b"%PDF-1.4 test" and r.headers["X-Filename"] == "acme.pdf"
+    assert r.status_code == 200 and r.content == b"%PDF-1.4 test" and r.headers["X-Filename"].endswith("_Resume.pdf")
 
     # Saving answers skips sensitive questions.
     items = [{"question": "Years of SQL?", "answer": "2"}, {"question": "Social Security Number", "answer": "123"}]

@@ -64,15 +64,16 @@ class AzureOpenAIClient:
             raise RuntimeError("AZURE_OPENAI_ENDPOINT is not set")
         token = get_bearer_token_provider(DefaultAzureCredential(), "https://cognitiveservices.azure.com/.default")
         self.client = AzureOpenAI(azure_endpoint=endpoint, azure_ad_token_provider=token,
-                                  api_version=settings.azure_openai_api_version, max_retries=2, timeout=120)
+                                  api_version=settings.azure_openai_api_version, max_retries=2, timeout=300)
         self.deployment = deployment or settings.azure_openai_deployment
+        self.reasoning_effort = "low"  # resume tailoring raises it: rule-following matters more there
 
     def generate(self, prompt: str, temperature: float = 0.4) -> str:
         # Reasoning models ignore temperature; their reasoning also counts against the token cap.
         def call():
             response = self.client.chat.completions.create(
                 model=self.deployment, messages=[{"role": "user", "content": prompt}],
-                reasoning_effort="low", max_completion_tokens=12000,
+                reasoning_effort=self.reasoning_effort, max_completion_tokens=32000,
             )
             return response.choices[0].message.content or ""
 

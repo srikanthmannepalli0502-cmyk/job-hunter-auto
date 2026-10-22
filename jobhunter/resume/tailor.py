@@ -14,17 +14,22 @@ from jobhunter.resume.pdf import (
     check_resume_fit,
     format_to_pdf,
     sanitize_text,
+    short_last_lines,
 )
+from jobhunter.resume import ats
 
 MAX_TRIM_ROUNDS = 40
 
 LENGTH_RULES = {
     "normal": """
-LENGTH: Fill exactly 1 page - dense, no empty space.
-- SUMMARY: 3-4 detailed sentences: tools, domain, education, target role
-- Each bullet: 20-30 words with specifics
-- Each project: 1-2 bullet points
-- Skills: comprehensive, with relevant keywords""",
+LENGTH: Fill the whole page (97-100%) - dense, no empty space at the bottom.
+- SUMMARY: 3-4 sentences, 60-80 words: years and domain, tools, strongest results, education and target role
+- Current role: 3-4 bullets; longest past job: 6-7 bullets
+- A printed bullet line holds about {cpl} characters. Write every bullet as either ONE full line
+  ({one_low}-{one_high} characters) or TWO full lines ({two_low}-{two_high} characters), never in between
+- Exactly 3 projects with 2 bullets each
+- Skills: 6 lines, each "Category: item, item, ...", the job's supported keywords first
+- Every bullet ends close to the end of its last line: never leave a line holding only a few words""",
     "longer": """
 LENGTH: THE PREVIOUS VERSION LEFT EMPTY SPACE AT THE BOTTOM - ADD DETAIL.
 {hint}
@@ -45,23 +50,31 @@ LENGTH: THE PREVIOUS VERSION WAS TOO LONG FOR ONE PAGE - MAKE IT SHORTER.
 PROMPT = """You are an expert resume writer and ATS optimization specialist.
 
 CONTENT RULES:
-1. Match keywords from the job description
-2. Reorder bullets to put the most relevant experience first
+1. ATS: applicant tracking systems rank resumes by the job description's exact terms. Use the
+   posting's own words (e.g. "data quality", "stakeholders", "dashboards") wherever the base
+   resume supports the same fact, and put the most important supported terms in SKILLS and in
+   the first bullet of each job
+2. Rewrite each experience bullet in the language of this job: same facts and numbers, framed
+   for what the role needs; put the most relevant bullets first
 3. Headings: SUMMARY, EDUCATION, SKILLS, EXPERIENCE, PROJECTS, CERTIFICATIONS
 4. Rewrite SUMMARY to target this specific role
 5. Prioritize skills that appear in the job description
-6. Be truthful: reorganize and rephrase only, never invent experience, numbers or skills.
+6. Be truthful: reorganize and rephrase only, never invent experience, numbers, duties, tools or
+   outcomes (no "procurement", "runbooks", "led", "audits" unless the base resume says so).
    SKILLS may only list tools and skills that appear in the base resume: never add one just
    because the job description mentions it
 7. Start each bullet with a strong action verb; every bullet is a complete sentence
 8. Keep dates, names, titles and education EXACTLY as in the original (coursework on one line)
 9. Write numbers as digits exactly as in the base resume (2M+, 60%, 4 hours), never as words
-10. Select what fits one page: keep the most relevant bullets per job (fewer if needed), and if
-    the base resume lists more projects than fit, keep the 3-4 most relevant to this job
-    (always including the mandatory items below) and drop the rest. Keep at least 3 certifications
+10. Choose the 3 projects whose tools and results best match this job's duties and required skills
+    (e.g. dashboards and SQL for analyst roles, models for data science, LLMs for AI roles),
+    always including the mandatory items below; drop the rest. Keep each chosen project's header
+    line exactly as in the base resume, including its "| https://..." link. Keep at least 3 certifications
 11. Every number and claim stays with the job or project it belongs to in the base resume:
     never move a metric from a project into a job, or between jobs
 12. Past tense for past jobs and finished projects; present tense only for a current role (Present)
+13. A domain or tool that appears only in the job description (e.g. "credit risk", "Power BI") may be
+    named only in the SUMMARY as the role you're targeting, never as something you did or used
 {must_keep_rules}{corrections}
 FORMATTING:
 - First two lines: the name and the contact line, exactly as in the base resume
@@ -80,6 +93,18 @@ JOB DESCRIPTION:
 Return ONLY the resume text. No markdown, no explanations, no backticks."""
 
 
+RESIZE_PROMPT = """Rewrite this resume text so it is between {low} and {high} characters long
+(it is {now} now). Keep its meaning, its numbers and its tense. Write plain, complete sentences
+like the original: no "&", "<", "/" or other shortcuts, a space after every comma, third person
+(no "I"), ending with a period. Add no fact, tool, duty or result
+that isn't in the bullet or in these original bullets from the same job:
+{sources}
+
+Bullet: {bullet}
+
+Return only the rewritten bullet text, without a leading dash."""
+
+
 def build_prompt(base_resume: str, job_description: str, must_keep: list[str],
                  mode: str = "normal", hint: str = "", corrections: list[str] | None = None) -> str:
     must_keep_rules = ""
@@ -95,10 +120,18 @@ def build_prompt(base_resume: str, job_description: str, must_keep: list[str],
     return PROMPT.format(
         must_keep_rules=must_keep_rules,
         corrections=fix,
-        length_rules=LENGTH_RULES[mode].format(hint=hint),
+        length_rules=LENGTH_RULES[mode].format(hint=hint, **_budgets()),
         base_resume=base_resume,
         job_description=job_description,
     )
+
+
+def _budgets() -> dict:
+    cpl = round(_TextMeasure().chars_per_line("- " + "Collected, cleaned and transformed operational and "
+                                              "financial data from 5+ source systems; built and maintained "
+                                              "automated ETL pipelines with initial and incremental load strategies."))
+    return {"cpl": cpl, "one_low": int(cpl * 0.85), "one_high": int(cpl * 0.97),
+            "two_low": int(cpl * 1.8), "two_high": int(cpl * 1.96)}
 
 
 def missing_items(text: str, must_keep: list[str]) -> list[str]:
@@ -126,6 +159,22 @@ class _TextMeasure:
     def lines(self, line: str) -> int:
         body = sanitize_text(line[2:] if line.startswith(("- ", "* ")) else line)
         return max(1, math.ceil(self.pdf.get_string_width(body) / self.width_for(line)))
+
+    def printed(self, line: str) -> list[str]:
+        bullet = line.startswith(("- ", "* "))
+        body = sanitize_text(line[2:].strip() if bullet else line)
+        width = self.bullet_width if bullet else self.text_width
+        return self.pdf.multi_cell(width, 4.2, body, dry_run=True, output="LINES")
+
+    def last_share(self, line: str) -> float:
+        """How full the last printed line of `line` is (1.0 = full)."""
+        rows = self.printed(line)
+        width = self.bullet_width if line.startswith(("- ", "* ")) else self.text_width
+        return self.pdf.get_string_width(rows[-1]) / width if rows else 1.0
+
+    def chars_per_line(self, line: str) -> float:
+        rows = self.printed(line)
+        return sum(len(r) for r in rows[:-1]) / (len(rows) - 1) if len(rows) > 1 else len(line)
 
     def cut_to_lose_one_line(self, line: str) -> str | None:
         """Shortest word-boundary cut that makes `line` wrap onto one fewer line."""
@@ -252,9 +301,111 @@ def misplaced_claims(text: str, base: str) -> list[str]:
     return problems
 
 
+# Words a rewrite may add without adding a fact (connectives and plain resume verbs).
+_FREE_WORDS = set("""
+about above across after along also among another around based because before being below between both
+built create created delivering deliver delivered during each either enable enabled enabling ensure
+ensuring every first from further have having into itself make making more most other over same
+several since still such than that their them then there these they this those through throughout
+under until using utilize upon various where which while whose with within without would your
+support supported supporting help helped helping work worked working provide provided providing
+improve improved improving include included including team teams across monthly weekly daily
+""".split())
+
+
+def _stem(word: str) -> str:
+    w = word.lower()
+    for suffix in ("ations", "ation", "ings", "ing", "ers", "ies", "ied", "ed", "es", "er", "ly", "s"):
+        if w.endswith(suffix) and len(w) - len(suffix) >= 4:
+            return w[: -len(suffix)]
+    return w
+
+
+_WORD = re.compile(r"[A-Za-z][A-Za-z+#/-]{4,}")
+
+
+def _stems(text: str) -> set[str]:
+    """Stems of a text's words, with hyphenated words also split (twice-daily -> twice, daily)."""
+    words = _WORD.findall(text)
+    words += [x for w in words for x in re.split(r"[-/]", w) if len(x) > 2]
+    words += [w.replace("-", "") for w in words if "-" in w]
+    return {_stem(w) for w in words}
+
+
+def _known(word: str, stems: set[str], prefixes: set[str]) -> bool:
+    s = _stem(word)
+    return word.lower() in _FREE_WORDS or s in stems or s[:6] in prefixes  # troubleshot ~ troubleshoot
+
+
+def invented_words(line: str, base: str) -> list[str]:
+    """Content words in a tailored line that the master resume never uses, e.g. 'procurement'
+    or 'runbooks': a sign the rewrite added a fact."""
+    stems = _stems(base)
+    prefixes = {s[:6] for s in stems if len(s) >= 6} | {s[:5] for s in stems if len(s) >= 5}
+    out = []
+    for w in _WORD.findall(line):
+        if _known(w, stems, prefixes) or _known(w.replace("-", ""), stems, prefixes):
+            continue
+        parts = [x for x in re.split(r"[-/]", w) if len(x) > 2]
+        if len(parts) > 1 and all(_known(x, stems, prefixes) for x in parts):
+            continue
+        out.append(w)
+    return list(dict.fromkeys(out))
+
+
+def same_fact(a: str, b: str) -> bool:
+    """Two bullets state the same thing: they share a metric (e.g. 15+, 70%) or most words."""
+    na, nb = _numbers(a), _numbers(b)
+    if na & nb:
+        return True
+    sa, sb = _stems(a), _stems(b)
+    return len(sa & sb) / max(1, min(len(sa), len(sb))) >= 0.45
+
+
+def restore_invented_bullets(text: str, base: str, limit: int = 2) -> tuple[str, list[str]]:
+    """Replace each EXPERIENCE / PROJECTS bullet that still adds facts with the master resume's
+    closest original bullet. Returns (text, notes)."""
+    originals = [line for line in base.split("\n") if line.startswith(("- ", "* "))]
+    lines, notes, used, section = text.split("\n"), [], set(), ""
+    for i, line in enumerate(lines):
+        upper = line.strip().upper()
+        if upper in _HEADINGS:
+            section = upper
+            continue
+        if section not in ("EXPERIENCE", "PROJECTS") or not line.startswith(("- ", "* ")):
+            continue
+        extra = invented_words(line, base)
+        if len(extra) < limit:
+            continue
+        mine = _stems(line)
+        others = [l for j, l in enumerate(lines) if j != i and l.startswith(("- ", "* "))]
+        on_page = {o for o in originals if any(same_fact(o, other) for other in others)}
+        best = max((o for o in originals if o not in used and o not in on_page),
+                   key=lambda o: len(mine & _stems(o)), default=None)
+        if best:
+            used.add(best)
+            lines[i] = best
+            notes.append(f"restored your original bullet in place of one that added: {', '.join(extra)}")
+    return "\n".join(lines), notes
+
+
+def bullet_skills(text: str) -> str:
+    """'Category: a, b' lines in SKILLS get a leading '- ' so they render as bullets."""
+    out, in_skills = [], False
+    for line in text.split("\n"):
+        upper = line.strip().upper()
+        if upper in _HEADINGS:
+            in_skills = upper == "SKILLS"
+        elif in_skills and ":" in line and not line.startswith(("- ", "* ")):
+            line = "- " + line.strip()
+        out.append(line)
+    return "\n".join(out)
+
+
 def drop_unsupported_skills(text: str, base: str) -> str:
     """Remove SKILLS items with no support in the base resume (e.g. a tool the LLM copied from
-    the job description). An item is kept if any of its words (4+ letters) appears in the base."""
+    the job description, or "credit reporting"). Every word of the item (outside parentheses)
+    must appear in the base resume."""
     base_lower = base.lower()
     out, in_skills = [], False
     for line in text.split("\n"):
@@ -265,9 +416,11 @@ def drop_unsupported_skills(text: str, base: str) -> str:
             prefix, sep, items = line.partition(":")
             if sep:
                 kept = []
-                for item in items.split(","):
-                    words = re.findall(r"[A-Za-z][A-Za-z+#.]{3,}", item)
-                    if not words or any(w.lower().rstrip(".") in base_lower for w in words):
+                for item in re.split(r",(?![^(]*\))", items):  # commas inside (...) stay with their item
+                    # the item's own words must all be supported; a "(qualifier)" may rephrase
+                    words = re.findall(r"[A-Za-z][A-Za-z+#.]{3,}", re.sub(r"\(.*?\)", "", item))
+                    if not words or all(w.lower().rstrip(".") in base_lower or _stem(w) in _stems(base)
+                                        or w.lower() in _FREE_WORDS for w in words):
                         kept.append(item.strip())
                     else:
                         logger.info(f"Dropped unsupported skill: {item.strip()}")
@@ -292,6 +445,8 @@ class ResumeTailor:
         self.linkedin_url = linkedin_url
         self.output_dir = Path(output_dir)
         self.warnings: list[str] = []  # problems left in the last tailored resume
+        if hasattr(llm, "reasoning_effort"):
+            llm.reasoning_effort = "medium"  # following the truthfulness rules matters more than speed
 
     def _generate(self, job_description: str, mode: str = "normal", hint: str = "",
                   corrections: list[str] | None = None) -> str:
@@ -299,7 +454,7 @@ class ResumeTailor:
         text = (self.llm.generate(prompt) or "").strip()
         if not text:
             return ""
-        text = ensure_header(text, self.base_resume_text)
+        text = bullet_skills(ensure_header(text, self.base_resume_text))
         return drop_unsupported_skills(text, self.base_resume_text)
 
     def _trim(self, text: str) -> str:
@@ -361,13 +516,169 @@ class ResumeTailor:
                     return longer
         return text
 
+    def problems(self, text: str, job_description: str) -> list[str]:
+        """What an ATS or a careful reader would flag, worded as fixes for the LLM."""
+        out = []
+        report = ats.score(text, job_description, self.base_resume_text)
+        if report.add_these:
+            out.append("The job asks for these and the base resume supports them, but your version leaves "
+                       "them out; work them in truthfully: " + ", ".join(report.add_these))
+        if claims := ats.unsupported_claims(text, self.base_resume_text):
+            out.append("These terms are not in the base resume; remove them outside the SUMMARY: " + ", ".join(claims))
+        section = ""
+        for line in text.split("\n"):
+            upper = line.strip().upper()
+            if upper in _HEADINGS:
+                section = upper
+            elif section in ("SUMMARY", "EXPERIENCE", "PROJECTS") and line.strip():
+                extra = [w for w in invented_words(line, self.base_resume_text)
+                         if section != "SUMMARY" or w.lower() not in job_description.lower()]
+                if len(extra) >= (3 if section == "SUMMARY" else 2):
+                    out.append(f'"{line.strip()[:70]}..." adds facts the base resume does not have '
+                               f"({', '.join(extra)}); rephrase using only the base resume's facts")
+        for s in short_last_lines(text, 0.4):
+            out.append(f"{s} - shorten that bullet by a few words or add real detail so its last line is fuller")
+        return out + misplaced_claims(text, self.base_resume_text)
+
+    def _entry_sources(self, text: str, index: int) -> list[str]:
+        """The master resume's bullets for the job or project that line `index` belongs to."""
+        lines = text.split("\n")
+        header = next((lines[i] for i in range(index, -1, -1)
+                       if lines[i].strip() and not lines[i].startswith(("- ", "* "))), "")
+        base_lines = self.base_resume_text.split("\n")
+        for section in ("EXPERIENCE", "PROJECTS"):
+            for h, bullets in _entries(base_lines, section):
+                if _entry_key(base_lines[h]) and _entry_key(base_lines[h])[:15] == _entry_key(header)[:15]:
+                    return [base_lines[i] for i in bullets]
+        return []
+
+    def _base_summary(self) -> str:
+        lines = self.base_resume_text.split("\n")
+        start = next((i for i, l in enumerate(lines) if l.strip().upper() == "SUMMARY"), None)
+        if start is None:
+            return ""
+        out = []
+        for l in lines[start + 1:]:
+            if l.strip().upper() in _HEADINGS:
+                break
+            out.append(l)
+        return " ".join(x.strip() for x in out if x.strip())
+
+    def fix_short_lines(self, text: str, min_share: float = 0.45) -> str:
+        """Rewrite each bullet whose last printed line holds only a few words to a measured length
+        (one line fewer), and keep the rewrite only if it really fits and adds nothing."""
+        measure = _TextMeasure()
+        lines = text.split("\n")
+        section = ""
+        for i, line in enumerate(lines):
+            if line.strip().upper() in _HEADINGS:
+                section = line.strip().upper()
+                continue
+            summary = section == "SUMMARY" and len(line) > 120
+            if not (line.startswith(("- ", "* ")) or summary):
+                continue
+            rows = measure.printed(line)
+            if len(rows) < 2 or measure.last_share(line) >= min_share:
+                continue
+            per_line = measure.chars_per_line(line)
+            if summary:  # keep the summary's length: fill its last line instead
+                low, high = int(per_line * (len(rows) - 0.25)), int(per_line * (len(rows) - 0.03))
+            else:
+                low, high = int(per_line * (len(rows) - 1) * 0.86), int(per_line * (len(rows) - 1) * 0.97)
+            sources = [self._base_summary()] if summary else self._entry_sources(text, i)
+            body = line.strip() if summary else line[2:].strip()
+            for _ in range(2):
+                prompt = RESIZE_PROMPT.format(low=low, high=high, now=len(body), bullet=body,
+                                              sources="\n".join(sources) or "(none)")
+                reply = (self.llm.generate(prompt) or "").strip().lstrip("-* ").strip()
+                candidate = reply if summary else "- " + reply
+                rows_ok = (len(measure.printed(candidate)) == len(rows)) if summary else (len(measure.printed(candidate)) < len(rows))
+                plain = (candidate.rstrip().endswith(".") and not re.search(r"[&<>]|,\S|\bI\b", candidate))
+                if (rows_ok and plain and measure.last_share(candidate) >= 0.6
+                        and len(invented_words(candidate, self.base_resume_text)) <= len(invented_words(line, self.base_resume_text))
+                        and _numbers(candidate) <= _numbers(line) | _numbers(" ".join(sources))):
+                    lines[i] = candidate
+                    break
+        return "\n".join(lines)
+
+    def fill_page(self, text: str, job_description: str, target: float = 99.0) -> str:
+        """Add the master resume's own bullets (most job keywords first) to the jobs and projects
+        already on the page, while it stays on one page."""
+        wanted = ats.terms_in(job_description)
+        for _ in range(12):
+            fit = check_resume_fit(text, self.linkedin_url)
+            if fit["status"] == "too_long" or fit["fill_percent"] >= target - 2:
+                break
+            lines = text.split("\n")
+            measure = _TextMeasure()
+            options = []
+            for section in ("EXPERIENCE", "PROJECTS"):
+                for header, bullets in _entries(lines, section):
+                    for source in self._entry_sources(text, header):
+                        if any(same_fact(source, lines[b]) for b in bullets):
+                            continue  # already on the page, maybe reworded
+                        if len(measure.printed(source)) > 1 and measure.last_share(source) < 0.45:
+                            continue  # would add a near-empty line
+                        gain = len(ats.terms_in(source) & wanted)
+                        where = (bullets[-1] if bullets else header) + 1
+                        options.append((gain, -len(source), where, source))
+            added = False
+            for gain, _, where, source in sorted(options, reverse=True):
+                candidate = "\n".join(lines[:where] + [source] + lines[where:])
+                cfit = check_resume_fit(candidate, self.linkedin_url)
+                if cfit["status"] != "too_long" and cfit["fill_percent"] <= target:
+                    text, added = candidate, True
+                    break
+            if not added:
+                break
+        return text
+
+    def polish(self, job_description: str, text: str) -> str:
+        """One rewrite that fixes ATS gaps, unsupported terms and near-empty lines; kept only if
+        it still fits on one page and has fewer problems."""
+        problems = self.problems(text, job_description)
+        if not problems:
+            return text
+        logger.info(f"Polishing: {problems}")
+        retry = self._generate(job_description, corrections=problems)
+        if not retry or missing_items(retry, self.must_keep):
+            return text
+        if check_resume_fit(retry, self.linkedin_url)["status"] == "too_long":
+            retry = self._trim(retry)
+            if check_resume_fit(retry, self.linkedin_url)["status"] == "too_long":
+                return text
+        before = ats.score(text, job_description, self.base_resume_text).score
+        after = ats.score(retry, job_description, self.base_resume_text).score
+        if len(self.problems(retry, job_description)) < len(problems) and after >= before:
+            return retry
+        return text
+
     def tailor(self, job_description: str, company: str, role: str) -> str:
         """Return the path of the saved PDF, or "" if it could not be made to fit."""
         text = self.tailor_text(job_description)
         if not text:
             return ""
+        text = self.polish(job_description, text)
+        text, restored = restore_invented_bullets(text, self.base_resume_text)
+        if restored and check_resume_fit(text, self.linkedin_url)["status"] == "too_long":
+            text = self._trim(text)
+        text = self.fix_short_lines(text)
+        text = self.fill_page(text, job_description)
+        text = self.fix_short_lines(text)  # bullets just added from the master resume, too
+        text = self.fill_page(text, job_description)
+        text, restored_late = restore_invented_bullets(text, self.base_resume_text)  # resizes are checked too
+        restored += restored_late
+        if restored_late:
+            text = self.fill_page(text, job_description)
+        if check_resume_fit(text, self.linkedin_url)["status"] == "too_long":
+            text = self._trim(text)  # a resize or restore can tip it just over one page
+        self.ats_report = ats.score(text, job_description, self.base_resume_text)
+        logger.info(self.ats_report.summary())
         self.warnings = [f"missing: {m}" for m in missing_items(text, self.must_keep)]
-        self.warnings += misplaced_claims(text, self.base_resume_text)
+        self.warnings.append(self.ats_report.summary())
+        if claims := ats.unsupported_claims(text, self.base_resume_text):
+            self.warnings.append("not in your master resume, check the wording: " + ", ".join(claims))
+        self.warnings += misplaced_claims(text, self.base_resume_text) + restored
         for w in self.warnings:
             logger.warning(f"Check before sending: {w}")
 

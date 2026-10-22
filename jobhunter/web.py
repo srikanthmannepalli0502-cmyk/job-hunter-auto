@@ -280,6 +280,14 @@ class App:
         values.update({a.field: a.answer for a in self.tracker.answers() if a.field})
         return values
 
+    def upload_name(self, kind: str, suffix: str) -> str:
+        """The file name employers see: 'First_Last_Resume.pdf', not the internal name."""
+        import re as _re
+
+        first = next((line for line in self.resume_text().splitlines() if line.strip()), "")
+        name = "_".join(w.capitalize() for w in _re.findall(r"[A-Za-z]+", first)[:3]) or "My"
+        return f"{name}_{'Resume' if kind == 'resume' else 'Cover_Letter'}{suffix}"
+
     def extension_key(self, regenerate: bool = False) -> str:
         import secrets
 
@@ -598,7 +606,8 @@ def make_handler(app: App, port: int):
                     if path_ok is None:
                         return self.send_json({"error": f"no {parts[0]} for this job yet"}, 404)
                     kind = "application/pdf" if path_ok.suffix.lower() == ".pdf" else "text/plain; charset=utf-8"
-                    return self.send(path_ok.read_bytes(), kind, extra={"X-Filename": path_ok.name})
+                    return self.send(path_ok.read_bytes(), kind,
+                                     extra={"X-Filename": app.upload_name(parts[0], path_ok.suffix)})
                 if method == "POST" and parts == ["answers"]:
                     saved = 0
                     for item in data.get("items", [])[:100]:

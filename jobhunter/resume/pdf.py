@@ -8,8 +8,8 @@ PAGE_W = 215.9
 PAGE_H = 279.4
 MARGIN_TOP = 5
 MARGIN_BOTTOM = 8
-MARGIN_LEFT = 10
-MARGIN_RIGHT = 10
+MARGIN_LEFT = 8
+MARGIN_RIGHT = 8
 BODY_FONT_SIZE = 10
 HEADING_FONT_SIZE = 10
 NAME_FONT_SIZE = 14
@@ -60,6 +60,33 @@ def split_date(line):
     if m:
         return m.group(1).strip(), m.group(2).strip()
     return line.strip(), None
+
+
+BULLET_RADIUS = 0.55
+_LINK = re.compile(r"\s*\|\s*(https?://\S+)\s*$")
+
+
+def split_link(line: str) -> tuple[str, str]:
+    """'Project | Stack | https://github.com/x' -> ('Project | Stack', 'https://github.com/x')."""
+    m = _LINK.search(line)
+    return (line[:m.start()].rstrip(), m.group(1)) if m else (line, "")
+
+
+def short_last_lines(resume_text: str, min_share: float = 0.35) -> list[str]:
+    """Bullets and paragraphs whose last printed line is mostly empty (a few words on their own line)."""
+    pdf = ResumePDF()
+    content_width = PAGE_W - MARGIN_LEFT - MARGIN_RIGHT
+    found = []
+    for line in preprocess_lines(sanitize_text(resume_text).strip().split("\n")):
+        bullet = line.startswith(("- ", "* "))
+        if not line or not (bullet or len(line) > 120) or (not bullet and " | " in line):
+            continue
+        txt, width = (line[2:].strip(), content_width - 7) if bullet else (line, content_width)
+        pdf.set_font("Helvetica", "", BODY_FONT_SIZE)
+        printed = pdf.multi_cell(width, LINE_HEIGHT, txt, dry_run=True, output="LINES")
+        if len(printed) > 1 and pdf.get_string_width(printed[-1]) < min_share * width:
+            found.append(f"{printed[-1].strip()!r} alone on the last line of: {txt[:60]}...")
+    return found
 
 
 def preprocess_lines(raw_lines):
@@ -133,6 +160,14 @@ def _build_pdf(resume_text: str, linkedin_url: str = "") -> ResumePDF:
                     pdf.cell(pdf.get_string_width(part), LINE_HEIGHT, part, link=f"mailto:{part}")
                     pdf.set_text_color(0, 0, 0)
                     pdf.set_font("Helvetica", "", CONTACT_FONT_SIZE)
+                elif "github.com" in part.lower():
+                    url = re.search(r"(?:https?://)?(github\.com/\S+)", part, re.I)
+                    pdf.set_text_color(5, 99, 193)
+                    pdf.set_font("Helvetica", "U", CONTACT_FONT_SIZE)
+                    pdf.cell(pdf.get_string_width(part), LINE_HEIGHT, part,
+                             link="https://" + url.group(1) if url else "")
+                    pdf.set_text_color(0, 0, 0)
+                    pdf.set_font("Helvetica", "", CONTACT_FONT_SIZE)
                 elif "linkedin" in part.lower():
                     pdf.set_text_color(5, 99, 193)
                     pdf.set_font("Helvetica", "U", CONTACT_FONT_SIZE)
@@ -162,8 +197,9 @@ def _build_pdf(resume_text: str, linkedin_url: str = "") -> ResumePDF:
             pdf.set_font("Helvetica", "", BODY_FONT_SIZE)
             bullet_x = MARGIN_LEFT + 4
             text_x = MARGIN_LEFT + 7
-            pdf.set_x(bullet_x)
-            pdf.cell(3, LINE_HEIGHT, "-")
+            r = BULLET_RADIUS  # a round bullet (core PDF fonts have no bullet glyph)
+            pdf.set_fill_color(0, 0, 0)
+            pdf.ellipse(bullet_x + 0.4, pdf.get_y() + LINE_HEIGHT / 2 - r, 2 * r, 2 * r, style="F")
             pdf.set_x(text_x)
             text_width = content_width - 7
             pdf.multi_cell(text_width, LINE_HEIGHT, txt, new_x="LMARGIN", new_y="NEXT")
@@ -182,12 +218,22 @@ def _build_pdf(resume_text: str, linkedin_url: str = "") -> ResumePDF:
             pdf.ln(LINE_HEIGHT)
             continue
 
-        # SUB-HEADERS
+        # SUB-HEADERS (a project's trailing "| https://github.com/..." becomes a "GitHub" link on the right)
         next_l = lines[idx + 1] if idx + 1 < len(lines) else ""
         if next_l.startswith(("- ", "* ")):
             pdf.ln(0.3)
+            title, link = split_link(line)
             pdf.set_font("Helvetica", "B", BODY_FONT_SIZE)
-            pdf.cell(content_width, LINE_HEIGHT, line, new_x="LMARGIN", new_y="NEXT")
+            pdf.cell(content_width, LINE_HEIGHT, title)
+            if link:
+                pdf.set_text_color(5, 99, 193)
+                pdf.set_font("Helvetica", "U", BODY_FONT_SIZE)
+                label = "GitHub" if "github.com" in link else "Link"
+                w = pdf.get_string_width(label)
+                pdf.set_x(PAGE_W - MARGIN_RIGHT - w)
+                pdf.cell(w, LINE_HEIGHT, label, link=link)
+                pdf.set_text_color(0, 0, 0)
+            pdf.ln(LINE_HEIGHT)
             continue
 
         # REGULAR TEXT (start at the left margin: multi_cell otherwise leaves x at the right edge,
