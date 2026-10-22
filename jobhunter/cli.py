@@ -26,7 +26,7 @@ from loguru import logger
 from jobhunter.config import DEFAULT_PROFILE_PATH, load_profile, settings
 from jobhunter.pipeline import gather, prepare_kit, push, run_search
 from jobhunter.sources.base import USER_AGENT
-from jobhunter.sources.boards import find_board, write_boards
+from jobhunter.sources.boards import find_board, suggest_board, write_boards
 from jobhunter.sponsors import SponsorDB, describe, sponsor_score
 from jobhunter.tracker import STATUSES, Tracker
 
@@ -201,23 +201,50 @@ def cmd_discover_boards(args, profile, tracker) -> None:
     db = SponsorDB.load(profile.sponsorship.data_file)
     if db is None:
         sys.exit("No sponsor data; see README (H-1B sponsorship).")
+    import csv
+
     roles = profile.sponsorship.roles
     targets = sorted(db.by_key.values(), key=lambda s: s.filings_in(roles), reverse=True)
-    targets = [s for s in targets if s.filings_in(roles) >= args.min_filings][: args.top]
+    targets = [s for s in targets if s.filings_in(roles) >= args.min_filings]
+    existing: list[dict] = []
+    checked: set[str] = set()
+    if args.add:  # grow the list: keep every board you have, skip sponsors already checked
+        path = Path(profile.boards.file)
+        if path.exists():
+            with path.open(encoding="utf-8", newline="") as f:
+                existing = list(csv.DictReader(f))
+        if args.checked and Path(args.checked).exists():
+            checked = set(Path(args.checked).read_text(encoding="utf-8").split("\n"))
+        have = {r["employer_key"] for r in existing}
+        targets = [s for s in targets if s.key not in have and s.key not in checked]
+    targets = targets[: args.top]
     print(f"Checking {len(targets)} sponsors with {args.min_filings}+ H-1B filings in your roles...")
 
     rows = []
+    llm = None
+    if args.ask_llm:
+        from jobhunter.llm import LLMClient
+
+        llm = LLMClient()
     with httpx.Client(timeout=15, headers={"User-Agent": USER_AGENT}) as client:
         for i, s in enumerate(targets, 1):
             found = find_board(client, s.key)
+            if not found and llm is not None:
+                try:
+                    found = suggest_board(llm, client, s.employer, s.key)
+                except Exception as e:  # noqa: BLE001 - one sponsor's lookup failing shouldn't stop the run
+                    print(f"  [{i}/{len(targets)}] {s.employer}: lookup failed ({e})")
             if found:
                 ats, slug, name = found
                 rows.append({"employer_key": s.key, "employer": s.employer, "ats": ats, "slug": slug,
                              "board_name": name})
                 print(f"  [{i}/{len(targets)}] {s.employer}: {ats}/{slug}")
-    write_boards(profile.boards.file, rows)
-    print(f"\nFound {len(rows)} boards; wrote {profile.boards.file}. Review it: remove any row that "
-          f"points at a different company with a similar name.")
+    write_boards(profile.boards.file, existing + rows)
+    if args.checked:
+        done = sorted(checked | {s.key for s in targets} - {""})
+        Path(args.checked).write_text("\n".join(done) + "\n", encoding="utf-8")
+    print(f"\nFound {len(rows)} new boards ({len(existing) + len(rows)} in all); wrote {profile.boards.file}. "
+          f"Review it: remove any row that points at a different company with a similar name.")
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -287,6 +314,11 @@ def build_parser() -> argparse.ArgumentParser:
     s = sub.add_parser("discover-boards", help="find target sponsors' Greenhouse/Lever/Ashby boards")
     s.add_argument("--top", type=int, default=300, help="how many top sponsors to check")
     s.add_argument("--min-filings", type=int, default=10, help="minimum H-1B filings in your roles")
+    s.add_argument("--add", action="store_true", help="keep the boards you have and add new ones")
+    s.add_argument("--checked", metavar="FILE", help="sponsors already checked (skipped, then updated)")
+    s.add_argument("--ask-llm", action="store_true",
+                   help="also ask the LLM for each sponsor's careers site (Workday, Oracle...); every "
+                        "suggestion is checked against the live site before it's kept")
     s.set_defaults(func=cmd_discover_boards)
 
     s = sub.add_parser("sponsor", help="look up a company's H-1B sponsorship")

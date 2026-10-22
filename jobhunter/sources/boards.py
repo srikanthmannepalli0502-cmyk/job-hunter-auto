@@ -467,6 +467,113 @@ def find_board(client: httpx.Client, employer_key: str, delay: float = 0.2) -> t
     return None
 
 
+SUGGEST_PROMPT = """Where does {employer} post its US job openings? Give the public careers site on one
+of these systems if it uses one, as a full URL:
+- Workday: https://<tenant>.wd<N>.myworkdayjobs.com/<site>
+- Greenhouse: https://boards.greenhouse.io/<slug> or https://job-boards.greenhouse.io/<slug>
+- Lever: https://jobs.lever.co/<slug>
+- Ashby: https://jobs.ashbyhq.com/<slug>
+- SmartRecruiters: https://jobs.smartrecruiters.com/<CompanyId>
+- Oracle: https://<host>.oraclecloud.com/hcmUI/CandidateExperience/en/sites/<site>
+Return JSON only: {{"urls": ["...", "..."]}} with up to 5 best guesses, most likely first. Guessing is
+fine: every URL is checked against the live site and wrong ones are discarded. Return {{"urls": []}}
+only if you're sure it uses a system not listed (e.g. its own careers site)."""
+
+
+def board_from_url(url: str) -> tuple[str, str] | None:
+    """(ats, slug) for a careers-site URL on a system we can read, else None."""
+    url = (url or "").strip()
+    for ats, rx in (("greenhouse", r"https://(?:boards|job-boards)\.greenhouse\.io/([A-Za-z0-9_-]+)"),
+                    ("lever", r"https://jobs\.lever\.co/([A-Za-z0-9_.-]+)"),
+                    ("ashby", r"https://jobs\.ashbyhq\.com/([A-Za-z0-9_.%-]+)"),
+                    ("smartrecruiters", r"https://(?:jobs|careers)\.smartrecruiters\.com/([A-Za-z0-9_-]+)")):
+        m = re.match(rx, url)
+        if m:
+            return ats, m.group(1)
+    for ats, parser in (("workday", WorkdaySite), ("oracle", OracleSite)):
+        try:
+            return ats, parser.parse(url).url
+        except ValueError:
+            continue
+    return None
+
+
+def verify_board(client: httpx.Client, ats: str, slug: str, employer_key: str) -> str | None:
+    """The board's name if it really is a live board of this employer, else None."""
+    try:
+        if ats == "greenhouse":
+            r = client.get(GREENHOUSE.format(slug=slug))
+            name = r.json().get("name", "") if r.status_code == 200 else ""
+            return name if name and _same_company(name, employer_key) else None
+        if ats == "lever":
+            r = client.get(LEVER.format(slug=slug), params={"mode": "json", "limit": 1})
+            return slug if r.status_code == 200 and isinstance(r.json(), list) else None
+        if ats == "ashby":
+            r = client.get(ASHBY.format(slug=slug))
+            return slug if r.status_code == 200 and r.json().get("jobs") is not None else None
+        if ats == "smartrecruiters":
+            r = client.get(SMARTRECRUITERS.format(slug=slug), params={"limit": 1})
+            return slug if r.status_code == 200 and r.json().get("totalFound", 0) > 0 else None
+        if ats in ("workday", "oracle") and not _url_names(slug, employer_key):
+            return None  # a live site, but not obviously this employer's
+        if ats == "workday":
+            site = WorkdaySite.parse(slug)
+            r = client.post(site.api + "/jobs", json={"appliedFacets": {}, "limit": 1, "offset": 0, "searchText": ""})
+            return site.url if r.status_code == 200 and "jobPostings" in r.json() else None
+        if ats == "oracle":
+            site = OracleSite.parse(slug)
+            r = client.get(site.api, params={"onlyData": "true", "expand": "requisitionList",
+                                             "finder": f"findReqs;siteNumber={site.site},limit=1"})
+            return site.url if r.status_code == 200 and r.json().get("items") is not None else None
+    except (httpx.HTTPError, ValueError):
+        return None
+    return None
+
+
+def _url_names(url: str, employer_key: str) -> bool:
+    """The URL's host or site names this employer: a word of its name, or its initials (wf = Wells Fargo)."""
+    words = [w.lower() for w in normalize_name(employer_key).split() if w.lower() not in _GENERIC_TAIL]
+    words = [w for w in words if len(w) >= 3] or words
+    hay = re.sub(r"[^a-z]", "", url.lower().split("//")[-1])
+    initials = "".join(w[0] for w in words)
+    return any(w[:5] in hay for w in words if len(w) >= 3) or (len(initials) >= 2 and initials in hay[:12])
+
+
+def suggest_board(llm, client: httpx.Client, employer: str, employer_key: str) -> tuple[str, str, str] | None:
+    """Ask the model where an employer posts jobs, and keep the first suggestion that checks out."""
+    import json
+
+    reply = llm.generate(SUGGEST_PROMPT.format(employer=employer)) or ""
+    m = re.search(r"\{.*\}", reply, re.S)
+    try:
+        urls = json.loads(m.group(0)).get("urls", []) if m else []
+    except ValueError:
+        urls = []
+    candidates = []
+    for url in urls[:5]:
+        found = board_from_url(str(url))
+        if not found:
+            continue
+        candidates.append(found)
+        if found[0] == "workday":  # right tenant, wrong site name is common: try the usual names too
+            site = WorkdaySite.parse(found[1])
+            host, tenant = site.url.rsplit("/", 1)[0], site.api.split("/")[-2]
+            t = tenant[:1].upper() + tenant[1:]
+            for name in ("External", "Careers", "careers", f"{t}Careers", f"{t}_Careers", f"{t}External",
+                         f"{t}_External", "External_Careers", "jobs", t):
+                candidates.append(("workday", f"{host}/{name}"))
+    tried = set()
+    for ats, slug in candidates:
+        if (ats, slug) in tried or len(tried) >= 25:
+            continue
+        tried.add((ats, slug))
+        name = verify_board(client, ats, slug, employer_key)
+        if name:
+            return ats, slug, name
+        time.sleep(0.2)
+    return None
+
+
 def write_boards(path: str | Path, rows: list[dict]) -> None:
     path = Path(path)
     path.parent.mkdir(parents=True, exist_ok=True)

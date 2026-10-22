@@ -224,3 +224,27 @@ def test_too_many_requests_is_retried():
     src = CompanyBoardsSource([Board("ACME", "Acme Inc", "greenhouse", "acme")], ["data analyst"], delay=0, client=client)
     jobs = src.fetch(SearchConfig(max_days_old=14, job_types=["full_time"]))
     assert [j.job_url for j in jobs] == ["https://gh/1"] and not src.failures
+
+
+def test_board_urls_and_employer_names():
+    from jobhunter.sources.boards import _url_names, board_from_url
+
+    assert board_from_url("https://boards.greenhouse.io/duolingo") == ("greenhouse", "duolingo")
+    assert board_from_url("https://jobs.smartrecruiters.com/Blend360") == ("smartrecruiters", "Blend360")
+    assert board_from_url("https://tmobile.wd1.myworkdayjobs.com/en-US/External") == (
+        "workday", "https://tmobile.wd1.myworkdayjobs.com/External")
+    assert board_from_url("https://careers.example.com/jobs") is None
+    assert _url_names("https://wf.wd1.myworkdayjobs.com/WellsFargoJobs", "WELLS FARGO BANK N A")
+    assert not _url_names("https://acme.wd5.myworkdayjobs.com/External", "INTUIT")
+
+
+def test_suggested_board_is_kept_only_if_it_answers():
+    from jobhunter.sources.boards import suggest_board
+
+    class LLM:
+        def generate(self, prompt):
+            return '{"urls": ["https://boards.greenhouse.io/wrongco", "https://boards.greenhouse.io/acme"]}'
+
+    client = routed_client({"greenhouse.io/v1/boards/acme": (200, {"name": "Acme Inc"}),
+                            "greenhouse.io/v1/boards/wrongco": (200, {"name": "Wrong Co"})})
+    assert suggest_board(LLM(), client, "Acme Inc", "ACME") == ("greenhouse", "acme", "Acme Inc")
