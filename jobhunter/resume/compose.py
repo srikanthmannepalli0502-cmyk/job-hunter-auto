@@ -132,6 +132,8 @@ Rules:
   {wanted}
 - A domain that appears only in the job description (e.g. "credit risk") may appear only in the
   summary, as the role being targeted.
+- Name each skill once: never a term next to its synonym or abbreviation ("LLMs" or "large language
+  models", not both; "ad tech", not "advertising technology and ad tech").
 
 CANDIDATE RESUME (ids in front):
 SUMMARY: {summary}
@@ -140,6 +142,19 @@ SKILLS:
 {catalog}
 
 JOB DESCRIPTION:
+{job}"""
+
+
+SUMMARY_PROMPT = """Write the SUMMARY of this candidate's resume for the job below: 3-4 sentences, {low}-{high}
+characters, third person without "I" (start like "Data professional with 3 years..."). Use only facts,
+numbers and skills from the RESUME; name the job's role as the target. Work in these job keywords
+where the resume supports them: {keywords}. Name each skill once (never a term and its synonym or
+abbreviation together). Return only the summary text.
+
+RESUME:
+{resume}
+
+JOB:
 {job}"""
 
 
@@ -283,12 +298,24 @@ class ResumeComposer:
         out += [(f"{entry.id}-{i}", b) for i, b in enumerate(entry.bullets, 1) if f"{entry.id}-{i}" not in seen]
         return out
 
+    def _summary_ok(self, text: str, job: str) -> bool:
+        extra = [w for w in invented_words(text, self.base) if w.lower() not in job.lower()]
+        return bool(text) and _numbers(text) <= _numbers(self.base) and len(extra) <= 2 \
+            and not re.search(r"\bI\b", text) and not new_shorthand(text, self.base + " " + job)
+
     def _summary(self, text: str, job: str) -> str:
         text = re.sub(r"\s+", " ", (text or "").strip())
-        extra = [w for w in invented_words(text, self.base) if w.lower() not in job.lower()]
-        if not text or not (_numbers(text) <= _numbers(self.base)) or len(extra) > 2 or re.search(r"\bI\b", text):
-            return self.master.summary
-        return text
+        if self._summary_ok(text, job):
+            return text
+        b = _budgets()
+        prompt = SUMMARY_PROMPT.format(low=int(b["cpl"] * 1.05 * 3.6), high=int(b["cpl"] * 1.05 * 3.95),
+                                       keywords=", ".join(sorted(self.wanted, key=str.lower)[:12]) or "(none)",
+                                       resume=self.base, job=job[:6000])
+        retry = re.sub(r"\s+", " ", self._ask(prompt, "low").strip().strip('"'))
+        if self._summary_ok(retry, job):
+            return retry
+        logger.info("Summary: kept the master summary (rewrites added facts)")
+        return self.master.summary
 
     def _skills(self, groups: list) -> list[str]:
         """Each group under one of the master resume's own categories, with items that appear in its
@@ -317,8 +344,18 @@ class ResumeComposer:
             if extra:
                 checked = [l + (", " if l.split(":", 1)[-1].strip() else " ") + ", ".join(extra)
                            if l.lstrip("-* ").startswith(c + ":") else l for l in checked]
-        checked = [l for l in checked if l.split(":", 1)[-1].strip()]
-        return checked or self.master.skills
+        seen, deduped = set(), []
+        for line in checked:  # an item appears once, on its first line
+            head, _, items = line.partition(":")
+            keep = []
+            for item in [i.strip() for i in re.split(r",(?![^(]*\))", items) if i.strip()]:
+                same = item.lower() in seen or any(ats.found(item, s) or ats.found(s, item) for s in seen)
+                if not same:  # "LLMs" after "large language models", "predictive models" after "predictive modeling"
+                    seen.add(item.lower())
+                    keep.append(item)
+            if keep:
+                deduped.append(f"{head}: {', '.join(keep)}")
+        return deduped or self.master.skills
 
     def extract_keywords(self, job: str) -> list[str]:
         """The posting's own keywords, from the model, kept only if they really appear in the posting."""
@@ -390,9 +427,11 @@ class ResumeComposer:
                 continue
             if len(d.certifications) > FULL_CERTIFICATIONS:
                 d.certifications.pop()
+            elif self._cut_one(d, MIN_BULLETS):
+                continue  # the 3 chosen projects matter more than a 6th or 7th bullet of an old job
             elif len(d.projects) > 2:
                 d.projects.pop()
-            elif not self._cut_one(d, MIN_BULLETS):
+            else:
                 break
         return d
 
@@ -439,7 +478,8 @@ class ResumeComposer:
         """Put each supported job keyword that's still missing on the page: bring in one of your own
         bullets that states it (in place of a less useful one), else add it to the fitting skills line."""
         for k in sorted(self.wanted, key=str.lower):
-            if ats.found(k, d.render(self.master)):
+            page = d.render(self.master)
+            if ats.found(k, page) or any(ats.found(v, page) for v in ats.variants(k)):
                 continue
             placed = False
             for entry, bullets in d.jobs + d.projects:
@@ -472,6 +512,12 @@ class ResumeComposer:
                 logger.info(f"Keyword '{k}': added to skills")
         return d
 
+    def _dedupe_skills(self, d: Draft) -> Draft:
+        d.skills = self._skills([{"category": l.lstrip("-* ").split(":", 1)[0],
+                                  "items": [i.strip() for i in re.split(r",(?![^(]*\))", l.split(":", 1)[1])]}
+                                 for l in d.skills if ":" in l])
+        return d
+
     def _skills_line_for(self, d: Draft, keyword: str) -> int:
         """The skills line a keyword belongs on: the one whose master line or nearby words share most."""
         words = set(re.findall(r"[a-z]{3,}", keyword.lower()))
@@ -489,7 +535,7 @@ class ResumeComposer:
         self.feedback = feedback.strip()
         d = self.fit(self.draft(job_description))
         d = self.grow(self.fix_short_lines(d))
-        d = self.fit(self.place_keywords(d))
+        d = self.fit(self._dedupe_skills(self.place_keywords(d)))
         return d.render(self.master)
 
     def tailor(self, job_description: str, company: str, role: str, feedback: str = "") -> str:
