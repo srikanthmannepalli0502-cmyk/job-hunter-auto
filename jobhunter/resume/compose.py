@@ -145,9 +145,11 @@ JOB DESCRIPTION:
 
 KEYWORDS_PROMPT = """List the keywords an applicant tracking system would scan resumes for in this
 job posting: tools, technical skills, methods, and domain or business phrases (for example "SQL",
-"data quality", "regulatory reporting", "stakeholder management"). Use the posting's exact wording,
-1-4 words each, most important first, 15-25 items. Skip degrees, years of experience, locations,
-benefits and soft filler like "team player".
+"data quality", "regulatory reporting", "stakeholder management"). Use the posting's wording in its
+short form, the way it would appear on a resume: "SQL" not "Structured Query Language (SQL)",
+"Python" not "Python (Programming Language)", "ETL" not "extract, transform, load (ETL)". 1-4 words
+each, most important first, 15-25 items. Skip degrees, years of experience, locations, benefits and
+soft filler like "team player" or "communication".
 
 Return JSON only: {{"keywords": ["...", "..."]}}
 

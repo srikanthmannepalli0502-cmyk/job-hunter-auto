@@ -70,3 +70,12 @@ def test_job_keywords_are_scored_as_exact_phrases():
     assert "Basel III" in report.gaps  # in the posting, not in your record
     assert "invented term" not in report.add_these + report.gaps + report.matched  # not in the posting
     assert ats.found("data quality", "improving data-quality checks")
+
+
+def test_formal_names_abbreviations_and_aliases_count():
+    base = "Python, SQL, ETL pipelines, machine learning, LLMs, Excel (pivot tables, VLOOKUP)."
+    for term in ["Python (Programming Language)", "Structured Query Language (SQL)", "Machine Learning (ML)",
+                 "extract, transform, load (ETL) pipelines", "large language models", "v-lookups"]:
+        assert ats.found(term, base), term
+    assert not ats.found("Amazon Web Services (AWS)", base)
+    assert "Programming Language" not in ats.variants("Python (Programming Language)")

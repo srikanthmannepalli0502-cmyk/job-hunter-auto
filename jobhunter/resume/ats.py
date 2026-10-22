@@ -56,21 +56,52 @@ def terms_in(text: str) -> set[str]:
 _BY_NAME = {name: rx for name, rx in _COMPILED}
 
 
+# Same thing, different words: an ATS (and a recruiter) counts "LLMs" for "large language models".
+ALIASES = {
+    "large language model": ["llm"], "machine learning": ["ml"], "artificial intelligence": ["ai"],
+    "extract transform load": ["etl", "elt"], "business intelligence": ["bi"],
+    "natural language processing": ["nlp"], "structured query language": ["sql"],
+    "vlookup": ["vlookup", "v lookup"], "microsoft excel": ["excel"], "ms excel": ["excel"],
+    "power bi": ["powerbi"], "amazon web services": ["aws"], "google cloud platform": ["gcp"],
+    "continuous integration": ["ci/cd", "github actions"], "a/b testing": ["a/b test"],
+    "key performance indicator": ["kpi"], "exploratory data analysis": ["eda"],
+}
+
+
+def variants(term: str) -> list[str]:
+    """The ways a posting's term can appear: as written, without its bracketed part, the bracketed
+    abbreviation alone ("Structured Query Language (SQL)" -> also "SQL"), and known aliases."""
+    term = term.strip()
+    out = [term]
+    main = re.sub(r"\s*\([^)]*\)", "", term).strip()
+    out += [main] + [x.strip() for x in re.findall(r"\(([^)]+)\)", term)
+                     if re.fullmatch(r"[A-Z][A-Za-z0-9/&.+-]{1,9}", x.strip())]  # "(SQL)", not "(Programming Language)"
+    for v in list(out):
+        key = re.sub(r"[^a-z/ ]+", " ", v.lower())
+        key = re.sub(r"\s+", " ", key).strip()
+        key = re.sub(r"s$", "", key) if len(key) > 4 else key
+        out += ALIASES.get(key, [])
+    return [v for v in dict.fromkeys(out) if v]
+
+
 def term_rx(term: str) -> re.Pattern:
-    """How to find a term: the built-in pattern for known terms, else the exact phrase (words may be
-    joined by spaces, hyphens or slashes; the last word may be plural)."""
-    words = [re.escape(w) for w in re.split(r"[\s/-]+", term.strip()) if w]
+    """How to find one wording: the built-in pattern for known terms, else the phrase (words may be
+    joined by spaces, hyphens, slashes or nothing; singular or plural)."""
+    words = [w for w in re.split(r"[\s/,-]+", term.strip()) if w]
     if not words:
         return re.compile(r"(?!x)x")
+    if len(words[-1]) > 3 and words[-1].lower().endswith("s") and not words[-1].lower().endswith("ss"):
+        words[-1] = words[-1][:-1]  # "models" -> "model", then allow the plural back
+    words = [re.escape(w) for w in words]
     words[-1] += r"(?:s|es)?"
-    phrase = _B + r"[\s/-]+".join(words) + r"(?![a-z])"
+    phrase = _B + r"[\s/-]*".join(words) + r"(?![a-z])"
     if term in _BY_NAME:  # the built-in pattern (with its synonyms) or the phrase itself
         return re.compile(f"(?:{_BY_NAME[term].pattern})|(?:{phrase})", re.I)
     return re.compile(phrase, re.I)
 
 
 def found(term: str, text: str) -> bool:
-    return bool(term_rx(term).search(text or ""))
+    return any(term_rx(v).search(text or "") for v in variants(term))
 
 
 @dataclass
