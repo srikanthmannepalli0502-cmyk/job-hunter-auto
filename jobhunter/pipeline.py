@@ -14,6 +14,7 @@ from loguru import logger
 from jobhunter.config import Profile
 from jobhunter.scoring import rank_jobs
 from jobhunter.sources import AdzunaSource, RemotiveSource, dedupe
+from jobhunter.sources.hackernews import HackerNewsSource
 from jobhunter.sources.base import is_excluded
 from jobhunter.sources.boards import CompanyBoardsSource, load_boards
 from jobhunter.sponsors import SponsorDB, apply_sponsorship
@@ -58,7 +59,7 @@ class Gathered:
 def gather(profile: Profile) -> Gathered:
     """Read every source, filter and score. Runs anywhere (your PC or GitHub Actions)."""
     jobs, problems = [], []
-    sources = [AdzunaSource(), RemotiveSource()]
+    sources = [AdzunaSource(), RemotiveSource(), HackerNewsSource(profile.scoring.preferred_titles)]
     boards = load_boards(profile.boards.file) if profile.boards.enabled else []
     if boards:
         sources.append(CompanyBoardsSource(boards, profile.scoring.preferred_titles))

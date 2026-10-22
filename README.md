@@ -56,9 +56,19 @@ keeps postings that:
 - were posted within `max_days_old` days.
 
 ```bash
-python -m jobhunter discover-boards --top 300 --min-filings 10   # once, then occasionally
+python -m jobhunter discover-boards --top 300 --min-filings 10   # once
+python -m jobhunter discover-boards --add --ask-llm --checked data/boards_checked.txt --top 120
 python -m jobhunter search                                        # includes the boards
 ```
+
+`--add` grows the list instead of replacing it, skipping sponsors already checked. `--ask-llm`
+also asks the LLM where each sponsor posts jobs (Workday, Oracle, SmartRecruiters...) and tries
+the usual Workday site names around its guess; a suggestion is kept only if it answers as a live
+job board whose address names the employer. Run weekly (for example from GitHub Actions), it
+works through your sponsor list a batch at a time, so the boards keep growing.
+
+**Hacker News "Who is hiring?"** is read too: the latest monthly thread, keeping posts that name
+one of your job titles in the US (many say outright whether they sponsor visas).
 
 Review `data/company_boards.csv` after discovery and delete any row that points at a different
 company with a similar name. Companies that build their own careers sites (Amazon, Google,
@@ -131,7 +141,10 @@ pip install -r requirements.txt
    skipped jobs stay hidden even when later runs find them again.
 
 3. **Resume (automatic):** shortlisting a job writes a tailored one-page resume from your master
-   resume. A cover note is written only when you click *Write cover note*.
+   resume. A cover note is written only when you click *Write cover note*. Want something
+   different? On the job page, *Change something?* rebuilds it with your request (kept for that
+   job, still fact-checked), or edit the text yourself and rebuild the PDF as written. The side
+   panel has the same *Change the resume* box.
 
 4. **Apply (you, with help):** *Apply* opens the posting. With the [Chrome extension](#chrome-extension)
    the side panel fills the form from your saved answers, attaches the tailored resume, saves new
@@ -199,12 +212,21 @@ All of these are gitignored. When hosted, they live on the app host and in your 
 
 ### Resume quality checks
 
-Tailoring asks the LLM for a one-page version of your master resume, then checks it: the name
-and contact lines are restored if dropped, skills not in your master resume are removed,
-every number in a bullet must appear in the same job or project of the master resume, and a
-page that overflows is rewritten shorter (whole bullets are dropped only as a last resort).
-Anything left is printed as a CHECK line. **Always read the resume and cover note before
-sending them.**
+The model never writes the resume as free text (`resume/compose.py`):
+
+1. It lists the posting's ATS keywords; only those found in the posting count, and those your
+   master resume contains are *supported*.
+2. It gets every master-resume bullet with an id and returns, as JSON, the 3 projects that fit
+   the job and each bullet reworded toward the job, naming the bullet it came from.
+3. A rewording is kept only if its numbers are exactly its source's, it keeps the job terms its
+   source has, and it adds no unsupported words or shorthand; otherwise your original is used.
+4. The page is filled with the most relevant bullets (projects and extra certificates give way
+   before experience), bullets ending with a few words on their last line are resized to a
+   measured length, and any supported keyword still missing is placed: one of your own bullets
+   that states it, or the matching skills line. Unsupported keywords are listed, never added.
+
+The job page shows the ATS score (posting terms matched), what's missing that you could add to
+your master resume if true, and anything to check. **Always read the resume before sending it.**
 
 ## Project layout
 
