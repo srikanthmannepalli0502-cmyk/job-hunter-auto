@@ -6,7 +6,7 @@
 // Which answer and option to use comes from matching.js (injected first). Every value is read back
 // after filling: one the page didn't keep is reported as skipped, not filled.
 (() => {
-  const VERSION = 4;
+  const VERSION = 5;
   if (window.__jobHunterApi && window.__jobHunterApi.version >= VERSION) return;
   const M = window.__jobHunterMatch;
   if (!M) throw new Error("Job Hunter: matching.js must be injected before content.js");
@@ -192,11 +192,57 @@
     return r;
   }
 
-  // A search-and-pick box with candidate answers: search a few short words ("career", "website")
-  // and take the first candidate that matches exactly one result.
-  async function chooseFromPromptAny(input, values, label) {
-    const words = [...new Set(values.flatMap((v) => M.norm(v).split(" ")).filter((w) => w.length >= 4))].slice(0, 4);
+  // Workday pick lists can be two levels deep (Comcast: "Job Sites" > "Indeed", "Other Job Site").
+  // A category has an arrow and no selection circle; Workday reacts to clicks on the inner
+  // promptLeafNode, and the list header's backButton steps back out. Only real options are chosen.
+  const leafNode = (el) => el.querySelector('[data-automation-id="promptLeafNode"]') || el;
+  const isCategory = (el) => !el.querySelector('[data-automation-id="radioBtn"], [data-automation-id="checkboxPanel"], input')
+    && !!el.querySelector("svg");
+  const listBack = () => [...document.querySelectorAll('[data-automation-id="multiSelectHeader"] [data-automation-id="backButton"]')]
+    .find(visible);
+
+  async function browsePrompt(input, values, label) {
     let reason = "unmatched";
+    const before = new Set(optionEls());
+    press(input);
+    input.focus();
+    const top = await waitForOptions(2000, before);
+    const pick = async (opts) => {
+      const r = pickAny(opts.filter((o) => !isCategory(o.el)), values, label);
+      if (r.reason === "ambiguous") reason = "ambiguous";
+      if (!r.option) return null;
+      press(leafNode(r.option.el));
+      await sleep(500);
+      return hasSelection(input) ? { text: r.option.text } : null;
+    };
+    const direct = await pick(top);
+    if (direct) return direct;
+    const seen = new Set();
+    for (const cat of top.filter((o) => isCategory(o.el)).slice(0, 10)) {
+      if (seen.has(cat.text)) continue;
+      seen.add(cat.text);
+      const now = optionEls().find((el) => clean(el.innerText) === cat.text && isCategory(el));
+      if (!now) continue;
+      const shown = new Set(optionEls());
+      press(leafNode(now));
+      const inside = await waitForOptions(1500, shown);
+      const got = await pick(inside);
+      if (got) return { text: `${cat.text} > ${got.text}` };
+      const b = listBack();
+      if (b) { press(b); await sleep(500); } else break;
+    }
+    key(document.activeElement || input, "Escape");
+    await sleep(200);
+    return { reason };
+  }
+
+  // A search-and-pick box with candidate answers: browse the list (and its categories), then search
+  // a few short words ("career", "website"); take the first candidate that matches exactly one option.
+  async function chooseFromPromptAny(input, values, label) {
+    const browsed = await browsePrompt(input, values, label);
+    if (browsed.text) return browsed;
+    const words = [...new Set(values.flatMap((v) => M.norm(v).split(" ")).filter((w) => w.length >= 4))].slice(0, 4);
+    let reason = browsed.reason || "unmatched";
     for (const word of words) {
       const before = new Set(optionEls());
       input.focus();
@@ -205,7 +251,7 @@
       await sleep(400);
       const r = pickAny(await waitForOptions(2500, before), values, label);
       if (r.option) {
-        press(r.option.el);
+        press(leafNode(r.option.el));
         await sleep(500);
         if (hasSelection(input)) return { text: r.option.text };
       } else if (r.reason === "ambiguous") reason = "ambiguous";
@@ -323,7 +369,7 @@
       }
       if (ans.status !== "matched") { if (label) skipped.push(why(label, ans.status)); continue; }
       if (isPrompt(el)) {
-        const r = await chooseFromPrompt(el, ans.value, label);
+        const r = await chooseFromPromptAny(el, [ans.value], label); // browses categories too
         if (r.text) note(label, r.text, ans.from, () => selectedItems(el).some((li) => sameText(li.innerText, r.text)));
         else skipped.push(r.reason === "ambiguous" ? why(label, r.reason, ans.value) : `${label} (pick it from the list)`);
         continue;

@@ -134,3 +134,10 @@ test("a saved answer about one company answers the same question at another", ()
   assert.equal(r.status, "matched");
   assert.equal(r.value, "No");
 });
+
+test("no careers-site option: the closest is 'Other Job Site', never a named site", () => {
+  const d = M.derived("How Did You Hear About Us?*", withJob());
+  const opts = ["Glassdoor", "Google", "Hackajob", "Indeed", "Other Job Site", "Zip Recruiter"];
+  const first = d.values.find((v) => M.resolveOption(opts, v).status === "matched");
+  assert.equal(opts[M.resolveOption(opts, first).index], "Other Job Site");
+});

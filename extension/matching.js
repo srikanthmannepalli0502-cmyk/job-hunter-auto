@@ -215,7 +215,9 @@
       const values = via.kind === "company_site"
         ? ["Company Website", "Company Career Site", "Career Site", "Careers Website", "Careers Page",
            `${short} Careers`, `${short} Careers Website`, `${short} Jobs Career Site`, `${short} Website`,
-           "Corporate Website", "Website", "Internet"]
+           "Corporate Website", "Website", "Internet",
+           // when the list has no careers-site option (Comcast: Job Sites > Other Job Site)
+           "Other Job Site", "Other Website", "Other"]
         : via.name ? [via.name, "Job Board", "Online Job Board", "Internet"] : [];
       return values.length ? { values, from: "where Job Hunter found this job" } : null;
     }
