@@ -19,6 +19,7 @@ import html
 import json
 import os
 import queue
+import re
 import sqlite3
 import tempfile
 import threading
@@ -254,6 +255,8 @@ class App:
             f"<span class='muted'>H-1B: {_e(j.sponsor_note or 'no data')}</span></p>{warn}{applied}"
             f"<div class='row'><a class='btn primary' href='{_e(j.job_url)}' target='_blank' rel='noopener'>Apply</a> "
             f"{self.decision_buttons(j, 'todo')}</div>"
+            f"<div class='row'>{self.people_links(j.company, j.title)} "
+            "<span class='muted'>(a referral or a note to the recruiter beats applying cold)</span></div>"
             f"<div class='row'>{kit_btns}</div>{files}<div class='row'>{apply_btns}</div></div>"
             f"<div class='card'><pre>{_e(j.description or 'No description from this source.')}</pre></div>")
         return self.page(j.title, body, "", flash, user)
@@ -291,7 +294,43 @@ class App:
                 f"<select name='status'>{opts}</select> <button>Save</button></form></td></tr>")
         body = ("<div class='tablewrap'><table><tr><th>Applied</th><th>Job</th><th>Company</th><th>What you sent</th><th>Status</th></tr>"
                 + "".join(rows) + "</table></div>") if rows else "<p class='muted'>No applications yet.</p>"
-        return self.page("Applications", body, "apps", flash, user)
+        return self.page("Applications", self.follow_ups() + body, "apps", flash, user)
+
+    def follow_ups(self) -> str:
+        """Applications with no answer after a week (worth a short follow-up or a referral ask), and
+        how far your applications have got."""
+        now = datetime.now(timezone.utc)
+        apps = self.tracker.applications()
+        due = []
+        for a, j in apps:
+            applied = a.applied_date if a.applied_date.tzinfo else a.applied_date.replace(tzinfo=timezone.utc)
+            days = (now - applied).days
+            if a.status == "applied" and days >= 7:
+                due.append(f"<li><a href='/job/{j.id}'>{_e(j.title)}</a> at {_e(j.company)}: {days} days, no answer yet. "
+                           f"{self.people_links(j.company, j.title)}</li>")
+        counts = {}
+        for a, _ in apps:
+            counts[a.status] = counts.get(a.status, 0) + 1
+        funnel = " &middot; ".join(f"{_e(s)}: <b>{counts[s]}</b>" for s in STATUSES if counts.get(s))
+        out = f"<div class='card'><b>{len(apps)} applications</b> &middot; {funnel}</div>" if apps else ""
+        if due:
+            out += ("<div class='card'><h3 style='margin-top:0'>Follow up</h3><p class='muted'>No reply after a week: "
+                    "a short note to the recruiter, or a referral from someone at the company, often gets a "
+                    "stalled application looked at.</p><ul>" + "".join(due[:20]) + "</ul></div>")
+        return out
+
+    @staticmethod
+    def people_links(company: str, title: str) -> str:
+        """LinkedIn searches you open yourself: Syracuse alumni and recruiters at the company."""
+        from urllib.parse import quote_plus
+
+        name = re.sub(r",?\s+(inc|llc|l\.l\.c|n\.a|corp|corporation|co|ltd|lp|llp)\.?$", "", company, flags=re.I).strip()
+        alumni = f"https://www.linkedin.com/search/results/people/?keywords={quote_plus(name + ' Syracuse University')}"
+        recruit = f"https://www.linkedin.com/search/results/people/?keywords={quote_plus(name + ' recruiter')}"
+        team = f"https://www.linkedin.com/search/results/people/?keywords={quote_plus(name + ' ' + title)}"
+        return (f"<span class='muted'>Find people:</span> <a href='{alumni}' target='_blank' rel='noopener'>Syracuse alumni</a> "
+                f"&middot; <a href='{recruit}' target='_blank' rel='noopener'>recruiters</a> &middot; "
+                f"<a href='{team}' target='_blank' rel='noopener'>people in this role</a>")
 
     def runs_page(self, user: str = "") -> str:
         rows = []

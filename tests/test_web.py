@@ -226,3 +226,20 @@ def test_editing_the_resume_text_rebuilds_the_pdf(server, tmp_path):
     saved = app.tracker.get_job(job.id)
     assert saved.kit_resume_path.endswith(".pdf") and "edited by you" in saved.kit_notes
     assert "Analyst who loves SQL." in open(saved.kit_resume_path[:-4] + ".txt", encoding="utf-8").read()
+
+
+def test_follow_ups_and_people_links(server):
+    from datetime import datetime, timedelta, timezone
+
+    from jobhunter.tracker import Application
+
+    base, app = server()
+    ingest(base, ["Acme, Inc."])
+    job = app.tracker.top_jobs(limit=5)[0]
+    a = app.tracker.log_application(job.id)
+    with app.tracker.Session() as s:
+        s.get(Application, a.id).applied_date = datetime.now(timezone.utc) - timedelta(days=9)
+        s.commit()
+    page = httpx.get(f"{base}/applications").text
+    assert "Follow up" in page and "9 days" in page and "Acme+Syracuse+University" in page
+    assert "Syracuse alumni" in httpx.get(f"{base}/job/{job.id}").text
