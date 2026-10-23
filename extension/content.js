@@ -6,7 +6,7 @@
 // Which answer and option to use comes from matching.js (injected first). Every value is read back
 // after filling: one the page didn't keep is reported as skipped, not filled.
 (() => {
-  const VERSION = 5;
+  const VERSION = 8;
   if (window.__jobHunterApi && window.__jobHunterApi.version >= VERSION) return;
   const M = window.__jobHunterMatch;
   if (!M) throw new Error("Job Hunter: matching.js must be injected before content.js");
@@ -196,51 +196,70 @@
   // A category has an arrow and no selection circle; Workday reacts to clicks on the inner
   // promptLeafNode, and the list header's backButton steps back out. Only real options are chosen.
   const leafNode = (el) => el.querySelector('[data-automation-id="promptLeafNode"]') || el;
-  const isCategory = (el) => !el.querySelector('[data-automation-id="radioBtn"], [data-automation-id="checkboxPanel"], input')
+  const isCategoryItem = (el) => !el.querySelector('[data-automation-id="radioBtn"], [data-automation-id="checkboxPanel"], input')
     && !!el.querySelector("svg");
+  // An option's inner element is also marked as an option: judge it by its list item.
+  const isCategory = (el) => isCategoryItem(el.parentElement?.closest('[role="option"]') || el);
   const listBack = () => [...document.querySelectorAll('[data-automation-id="multiSelectHeader"] [data-automation-id="backButton"]')]
     .find(visible);
 
-  async function browsePrompt(input, values, label) {
-    let reason = "unmatched";
+  // Open a pick list and wait for it to load (Workday shows a spinner first, sometimes for seconds).
+  async function openList(input) {
     const before = new Set(optionEls());
     press(input);
     input.focus();
-    const top = await waitForOptions(2000, before);
-    const pick = async (opts) => {
-      const r = pickAny(opts.filter((o) => !isCategory(o.el)), values, label);
-      if (r.reason === "ambiguous") reason = "ambiguous";
-      if (!r.option) return null;
-      press(leafNode(r.option.el));
-      await sleep(500);
-      return hasSelection(input) ? { text: r.option.text } : null;
-    };
-    const direct = await pick(top);
-    if (direct) return direct;
-    const seen = new Set();
-    for (const cat of top.filter((o) => isCategory(o.el)).slice(0, 10)) {
-      if (seen.has(cat.text)) continue;
-      seen.add(cat.text);
-      const now = optionEls().find((el) => clean(el.innerText) === cat.text && isCategory(el));
-      if (!now) continue;
+    return waitForOptions(6000, before);
+  }
+  const catEl = (text) => optionEls().find((el) => clean(el.innerText) === text && isCategory(el));
+  const leafEl = (text) => optionEls().find((el) => clean(el.innerText) === text && !isCategory(el));
+
+  // Read the whole list first: top-level options and the options inside each category. Then take
+  // the best candidate across all of them (so "Other" in one category can't beat "Other Job Site"
+  // in another), and go back and choose it. {text} | {reason, saw: number of options seen}.
+  async function browsePrompt(input, values, label) {
+    const top = await openList(input);
+    if (!top.length) { key(document.activeElement || input, "Escape"); return { reason: "unmatched", saw: 0 }; }
+    const all = top.filter((o) => !isCategory(o.el)).map((o) => ({ text: o.text, path: [] }));
+    const cats = [...new Set(top.filter((o) => isCategory(o.el)).map((o) => o.text))].slice(0, 12);
+    for (const cat of cats) {
+      const el = catEl(cat);
+      if (!el) continue;
       const shown = new Set(optionEls());
-      press(leafNode(now));
-      const inside = await waitForOptions(1500, shown);
-      const got = await pick(inside);
-      if (got) return { text: `${cat.text} > ${got.text}` };
+      press(leafNode(el));
+      const inside = await waitForOptions(3000, shown);
+      all.push(...inside.filter((o) => !isCategory(o.el)).map((o) => ({ text: o.text, path: [cat] })));
       const b = listBack();
-      if (b) { press(b); await sleep(500); } else break;
+      if (!b) break;
+      press(b);
+      // wait until the top level is back (categories visible again) before opening the next one
+      const end = Date.now() + 4000;
+      while (Date.now() < end && !optionEls().some((e) => isCategoryItem(e))) await sleep(150);
+      await sleep(250);
     }
+    // Workday marks both an option and its inner element as options: one entry per path + text.
+    const unique = [...new Map(all.map((o) => [[...o.path, o.text].join(" > "), o])).values()];
+    const r = pickAny(unique.map((o) => ({ ...o, el: null })), values, label);
+    if (!r.option) { key(document.activeElement || input, "Escape"); await sleep(200); return { reason: r.reason, saw: all.length }; }
+    for (const cat of r.option.path) {  // walk to it, then choose it
+      const el = catEl(cat);
+      if (!el) break;
+      const shown = new Set(optionEls());
+      press(leafNode(el));
+      await waitForOptions(3000, shown);
+    }
+    const target = leafEl(r.option.text);
+    if (target) { press(leafNode(target)); await sleep(600); }
+    if (hasSelection(input)) return { text: [...r.option.path, r.option.text].join(" > "), value: r.value };
     key(document.activeElement || input, "Escape");
-    await sleep(200);
-    return { reason };
+    return { reason: "dropped", saw: all.length };
   }
 
-  // A search-and-pick box with candidate answers: browse the list (and its categories), then search
-  // a few short words ("career", "website"); take the first candidate that matches exactly one option.
+  // A search-and-pick box with candidate answers: browse the list (and its categories); only a list
+  // that showed nothing is searched by typing a few short words ("career", "website").
   async function chooseFromPromptAny(input, values, label) {
     const browsed = await browsePrompt(input, values, label);
     if (browsed.text) return browsed;
+    if (browsed.saw) return { reason: browsed.reason };
     const words = [...new Set(values.flatMap((v) => M.norm(v).split(" ")).filter((w) => w.length >= 4))].slice(0, 4);
     let reason = browsed.reason || "unmatched";
     for (const word of words) {
@@ -363,14 +382,18 @@
       const d = ans.status === "none" && isPrompt(el) ? M.derived(label, ctx) : null; // "how did you hear"
       if (d) {
         const r = await chooseFromPromptAny(el, d.values, label);
-        if (r.text) note(label, r.text, d.from, () => selectedItems(el).some((li) => sameText(li.innerText, r.text)));
+        if (r.text) note(label, r.text, d.from, () => selectedItems(el).some((li) => sameText(li.innerText, r.text.split(" > ").pop())));
         else skipped.push(r.reason === "ambiguous" ? why(label, r.reason, d.values[0]) : `${label} (pick it from the list)`);
         continue;
       }
       if (ans.status !== "matched") { if (label) skipped.push(why(label, ans.status)); continue; }
       if (isPrompt(el)) {
-        const r = await chooseFromPromptAny(el, [ans.value], label); // browses categories too
-        if (r.text) note(label, r.text, ans.from, () => selectedItems(el).some((li) => sameText(li.innerText, r.text)));
+        // a saved answer first; if no option matches it ("career site" in a list without one), the
+        // derived candidates (Comcast: Email > Comcast Job Alert)
+        const alt = M.derived(label, ctx);
+        const r = await chooseFromPromptAny(el, [ans.value, ...(alt ? alt.values : [])], label); // browses categories too
+        const from = r.value && alt && r.value !== ans.value ? alt.from : ans.from;
+        if (r.text) note(label, r.text, from, () => selectedItems(el).some((li) => sameText(li.innerText, r.text.split(" > ").pop())));
         else skipped.push(r.reason === "ambiguous" ? why(label, r.reason, ans.value) : `${label} (pick it from the list)`);
         continue;
       }

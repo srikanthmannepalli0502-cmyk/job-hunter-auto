@@ -209,15 +209,16 @@
     if (!label || topic(label)) return null;
     const job = ctx.job || {};
     const l = norm(generalize(label, job.company));
-    const short = companyNames(job.company)[0] || "";
     if (HEARD.test(l) || questionKey(label) === questionKey("How did you hear about us?")) {
       const via = job.found_via || {};
+      const names = companyNames(job.company);  // "Comcast Cable Communications", "Comcast"
       const values = via.kind === "company_site"
         ? ["Company Website", "Company Career Site", "Career Site", "Careers Website", "Careers Page",
-           `${short} Careers`, `${short} Careers Website`, `${short} Jobs Career Site`, `${short} Website`,
+           ...names.flatMap((n) => [`${n} Careers`, `${n} Careers Website`, `${n} Jobs Career Site`, `${n} Website`]),
            "Corporate Website", "Website", "Internet",
-           // when the list has no careers-site option (Comcast: Job Sites > Other Job Site)
-           "Other Job Site", "Other Website", "Other"]
+           // no careers-site option: the company's own job alerts, then a generic choice
+           // (Comcast: Email > Comcast Job Alert; Job Sites > Other Job Site)
+           ...names.map((n) => `${n} Job Alert`), "Job Alert", "Other Job Site", "Other Website", "Other"]
         : via.name ? [via.name, "Job Board", "Online Job Board", "Internet"] : [];
       return values.length ? { values, from: "where Job Hunter found this job" } : null;
     }

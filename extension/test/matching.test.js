@@ -141,3 +141,11 @@ test("no careers-site option: the closest is 'Other Job Site', never a named sit
   const first = d.values.find((v) => M.resolveOption(opts, v).status === "matched");
   assert.equal(opts[M.resolveOption(opts, first).index], "Other Job Site");
 });
+
+test("Comcast-style list: the company's job alert comes before 'Other Job Site'", () => {
+  const d = M.derived("How Did You Hear About Us?*", withJob());
+  const opts = ["Comcast Job Alert", "Email from Comcast Recruiter", "Other Email", "Glassdoor", "Indeed",
+                "Other Job Site", "LinkedIn", "Other Social Media Site", "Other Event", "Other Advertisement"];
+  const first = d.values.find((v) => M.resolveOption(opts, v).status === "matched");
+  assert.equal(opts[M.resolveOption(opts, first).index], "Comcast Job Alert");
+});
