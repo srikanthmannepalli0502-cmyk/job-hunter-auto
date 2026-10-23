@@ -108,6 +108,28 @@ def work_history(resume_text: str) -> dict:
     return {"jobs": jobs, "education": education(resume_text)}
 
 
+def skills(resume_text: str, description: str = "", limit: int = 12) -> list[str]:
+    """Short skill names under SKILLS ('Azure (Functions, ...)' -> 'Azure'), the ones the job
+    description mentions first, for skill pickers like Workday's."""
+    lines = resume_text.splitlines()
+    start = next((i for i, l in enumerate(lines) if l.strip().upper() == "SKILLS"), None)
+    if start is None:
+        return []
+    names = []
+    for line in lines[start + 1:]:
+        line = line.strip()
+        if line.isupper() and len(line.split()) <= 4:
+            break
+        items = re.sub(r"\([^)]*\)", "", line.split(":", 1)[-1])
+        for item in items.split(","):
+            item = item.strip(" -.")
+            if item and len(item.split()) <= 3 and item not in names:
+                names.append(item)
+    desc = description.lower()
+    mentioned = [n for n in names if re.search(rf"(?<![\w]){re.escape(n.lower())}(?![\w])", desc)]
+    return (mentioned + [n for n in names if n not in mentioned])[:limit]
+
+
 def education(resume_text: str) -> list[dict]:
     """Degrees under EDUCATION: 'Syracuse University  Dec 2026' then "Master's, Applied Data Science | GPA: 3.67/4.0"
     -> [{school, degree, major, gpa, end}]."""

@@ -17,7 +17,14 @@
     </div>
 
     <div class="card">
-      <button id="fill" class="primary">Fill this page</button>
+      <button id="auto" class="primary">Fill to Review</button>
+      <button id="stopAuto" hidden>Stop</button>
+      <div class="muted">Workday: fills each step, attaches your resume and presses Save and Continue. Stops at Review, or at any question you need to answer. Never submits.</div>
+      <div id="autoResult"></div>
+    </div>
+
+    <div class="card">
+      <button id="fill">Fill this page</button>
       <button id="previewResume">Preview resume</button>
       <button id="attachResume">Attach resume</button>
       <button id="attachCover">Attach cover note</button>
@@ -50,7 +57,7 @@
       <a href="#" id="openApp">Open Job Hunter</a>
       <div id="appliedResult" class="muted"></div>
     </div>
-    <p class="muted">Job Hunter never submits forms for you. Check every filled field before you submit.</p>
+    <p class="muted">Job Hunter never submits applications. "Fill to Review" only presses Workday's Save and Continue between steps. Check every filled field before you submit.</p>
   </main>
   <script src="api.js"></script>
   <script src="sidepanel.js"></script>

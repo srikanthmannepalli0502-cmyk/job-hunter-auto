@@ -24,6 +24,7 @@ function esc(s) {
 }
 
 async function refresh() {
+  if (autoRunning) return; // keep acting on the application being filled
   tab = await activeTab();
   const { appUrl, key } = await settings();
   $("setup").hidden = !!(appUrl && key);
@@ -76,8 +77,8 @@ async function preview(which) {
   previewed.add(`${which}:${ctx.job.id}`);
 }
 
-async function attachFile(which) {
-  if (!previewed.has(`${which}:${ctx.job.id}`)) {
+async function attachFile(which, auto = false) {
+  if (!auto && !previewed.has(`${which}:${ctx.job.id}`)) {
     await preview(which);
     $("attachResult").innerHTML = `<span class="warn">Opened the ${which} in a new tab. Read it, then click Attach again to upload it.</span>`;
     return;
@@ -93,6 +94,88 @@ async function attachFile(which) {
   $("attachResult").innerHTML = ok
     ? `<span class="ok">Attached ${esc(filename)}.</span> Check the page shows it.`
     : `<span class="warn">No ${which} upload field found on this page (some sites only show it after you click "Upload").</span>`;
+  return ok;
+}
+
+// Fill to Review (Workday): fill the step, attach the resume where asked, press Save and Continue,
+// and repeat. Stops at Review, at a question that's yours, at any error the page shows, or after 8
+// steps, and tells you (a desktop notification and the app's "Waiting on you" list). After you
+// answer what it stopped on, "I've filled it, continue" goes on from that step.
+let stopAuto = false;
+let autoRunning = false; // the panel stays on the application's tab while this runs
+const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+const workdayStatus = async () => (await inPage("status")).find((s) => s.workday);
+$("stopAuto").addEventListener("click", () => { stopAuto = true; });
+$("auto").addEventListener("click", () => fillToReview(false));
+$("autoResult").addEventListener("click", (e) => { if (e.target.id === "continueAuto") fillToReview(true); });
+
+// A desktop notification (click it to come back to this tab) and the job's state in the app.
+async function tellYou(state, step, note) {
+  const job = ctx?.job;
+  const title = state === "review" ? "Ready for you to submit" : "Job Hunter needs you";
+  const where = job ? `${job.title} at ${job.company}` : tab.title || "this application";
+  try {
+    chrome.notifications.create(`jh-${tab.id}`, {
+      type: "basic", iconUrl: "icon128.png", title, requireInteraction: true, priority: 2,
+      message: state === "review" ? `${where} is at Review. Check it and submit.` : `${where}, ${step}: ${note}`.slice(0, 300),
+    });
+  } catch { /* notifications are a convenience */ }
+  if (job) {
+    try { await api(`/api/x/progress/${job.id}`, { method: "POST", body: { state, step, note, url: tab.url } }); } catch { /* app offline */ }
+  }
+}
+
+async function fillToReview(trustThisStep) {
+  if (!ctx || autoRunning) return;
+  stopAuto = false;
+  autoRunning = true;
+  $("auto").disabled = true;
+  $("stopAuto").hidden = false;
+  const lines = [];
+  const say = (html) => { lines.push(html); $("autoResult").innerHTML = lines.map((l) => `<div>${l}</div>`).join(""); };
+  const stopped = `<span class="warn">Stopped. Nothing past this step was touched.</span>`;
+  const again = `<button id="continueAuto" class="primary">I've filled it, continue</button>`;
+  const needsYou = async (step, items, note) => {
+    say(`<span class="warn">Stopped at ${esc(step)}. ${esc(note)}</span>` +
+        (items.length ? `<ul>${items.map((s) => `<li>${esc(s)}</li>`).join("")}</ul>` : "") + again);
+    await tellYou("needs_you", step, items.length ? items.slice(0, 3).join("; ") : note);
+  };
+  try {
+    for (let page = 0; ; page++) {
+      if (stopAuto) return say(stopped);
+      const st = await workdayStatus();
+      if (!st) return say(`<span class="muted">Fill to Review works on Workday applications. Here, use Fill this page and submit yourself.</span>`);
+      if (st.review) {
+        say(`<span class="ok"><b>Reached Review.</b></span> Check every answer and the resume; change anything you want, then submit yourself.`);
+        return await tellYou("review", st.step.name, "Check it and submit");
+      }
+      if (page >= 8) return await needsYou(st.step.name, [], "It went through 8 steps without reaching Review.");
+      const step = `step ${st.step.n} of ${st.step.of} (${st.step.name})`;
+      say(`<b>Step ${st.step.n} of ${st.step.of}: ${esc(st.step.name)}</b>`);
+      const frames = await inPage("fill", ctx);
+      const filled = frames.flatMap((f) => f.filled || []);
+      const skipped = frames.flatMap((f) => f.skipped || []);
+      say(`<span class="muted">filled ${filled.length}${skipped.length ? `; left ${skipped.length}: ${esc(skipped.slice(0, 4).map((s) => s.slice(0, 50)).join("; "))}` : ""}</span>`);
+      if (st.needsResume && ctx.job?.has_resume && await attachFile("resume", true)) {
+        for (let i = 0; i < 40 && (await workdayStatus())?.needsResume; i++) await sleep(250); // upload finishing
+        say(`<span class="muted">attached your tailored resume (open it on Review to check)</span>`);
+      }
+      // Questions only you can answer stop here, unless you just said this step is done.
+      const yours = skipped.filter((s) => /answer this one yourself|saved answers disagree|more than one option fits/.test(s));
+      if (yours.length && !(trustThisStep && page === 0)) return await needsYou(step, yours, "Answer these on the page.");
+      if (stopAuto) return say(stopped);
+      if (!(await inPage("next")).some((r) => r.moved)) {
+        const errs = (await workdayStatus())?.errors || [];
+        return await needsYou(step, errs, errs.length ? "The page didn't move on. It says:" : "The page didn't move on.");
+      }
+    }
+  } catch (e) {
+    say(`<span class="bad">${esc(e.message)}</span>`);
+  } finally {
+    autoRunning = false;
+    $("auto").disabled = false;
+    $("stopAuto").hidden = true;
+  }
 }
 $("previewResume").addEventListener("click", () => preview("resume").catch((e) => ($("attachResult").textContent = e.message)));
 $("attachResume").addEventListener("click", () => attachFile("resume").catch((e) => ($("attachResult").textContent = e.message)));

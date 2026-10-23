@@ -163,8 +163,18 @@ pip install -r requirements.txt
    everything and submit, then click *I submitted this application*; the app records which
    resume and cover note you sent.
 
+   On Workday, *Fill to Review* does this step by step: it fills the step, attaches the tailored
+   resume where the step asks for one, and presses *Save and Continue*, until the Review step.
+   It stops (with a desktop notification) at Review, or at a question only you can answer, or when
+   the page shows an error; after you answer, *I've filled it, continue* goes on from there. Jobs
+   waiting on you are listed under *Waiting on you* in the app.
+
 Job Hunter never submits applications for you, and never fills passwords, SSN, passport, bank or
-date-of-birth fields.
+date-of-birth fields. The only button it presses is Workday's page-footer next button
+(`data-automation-id` `pageFooterNextButton` or `bottom-navigation-next-button`), and only while it
+reads *Save and Continue*, *Next* or *Continue*; never on the Review step, and never a button whose
+label mentions submit, apply, send, finish or confirm. Greenhouse, Lever and Ashby forms are one
+page with only a *Submit* button, so there it just fills.
 
 ### Hosting
 

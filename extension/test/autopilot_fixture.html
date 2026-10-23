@@ -1,0 +1,66 @@
+<!doctype html>
+<html>
+<head>
+<meta charset="utf-8">
+<title>Workday-like steps (autopilot test fixture)</title>
+</head>
+<body>
+<!-- Progress bar and footer as on the Comcast Workday application (Oct 2026). -->
+<ol data-automation-id="progressBar"></ol>
+<div id="page"></div>
+<button data-automation-id="pageFooterBackButton" type="button">Back</button>
+<button data-automation-id="pageFooterNextButton" type="button" id="next">Save and Continue</button>
+<pre id="result"></pre>
+<script>
+const STEPS = ["My Information", "Application Questions", "Review"];
+let n = 1;
+window.submitted = false;
+function render() {
+  document.querySelector("[data-automation-id=progressBar]").innerHTML = STEPS.map((s, i) => {
+    const id = i + 1 < n ? "progressBarCompletedStep" : i + 1 === n ? "progressBarActiveStep" : "progressBarInactiveStep";
+    const pre = i + 1 < n ? "completed step" : i + 1 === n ? "current step" : "step";
+    return `<li data-automation-id="${id}">${pre} ${i + 1} of ${STEPS.length}\n${s}</li>`;
+  }).join("");
+  document.getElementById("page").innerHTML = n === 1
+    ? `<div data-automation-id="formField-firstName"><label for="fn">First Name*</label><input id="fn"></div>`
+    : n === 2 ? `<input type="file" id="resume">` : `<h2>Review</h2>`;
+  document.getElementById("next").textContent = n === STEPS.length ? "Submit" : "Save and Continue";
+}
+document.getElementById("next").addEventListener("click", () => {
+  if (n === STEPS.length) { window.submitted = true; return; }
+  if (n === 1 && !document.getElementById("fn").value) {
+    if (!document.querySelector("[data-automation-id=errorMessage]")) {
+      document.getElementById("page").insertAdjacentHTML("beforeend", `<div data-automation-id="errorMessage">First Name is required</div>`);
+    }
+    return;
+  }
+  setTimeout(() => { n++; render(); }, 300); // Workday saves before showing the next step
+});
+render();
+</script>
+<script src="../matching.js"></script>
+<script src="../content.js"></script>
+<script>
+if (location.search.includes("run")) {
+  const api = window.__jobHunterApi, out = {};
+  (async () => {
+    out.start = api.status();
+    out.blocked = await api.next();             // First Name empty: the page shows an error and stays
+    document.getElementById("fn").value = "Sam";
+    out.toQuestions = await api.next();
+    out.questions = api.status();
+    const btn = document.getElementById("next");
+    btn.textContent = "Submit Application";     // a submit-like label is never pressed
+    out.submitLabel = await api.next();
+    btn.textContent = "Save and Continue";
+    out.toReview = await api.next();
+    out.review = api.status();
+    out.atReview = await api.next();            // the Review button is Submit: never pressed
+    out.submitted = window.submitted;
+  })().then(
+    () => { document.getElementById("result").textContent = JSON.stringify(out); },
+    (e) => { document.getElementById("result").textContent = JSON.stringify({ error: String(e) }); });
+}
+</script>
+</body>
+</html>

@@ -39,6 +39,7 @@ from jobhunter.tracker import STATUSES, Application, Job, Tracker
 VIEWS = {
     "todo": "To review",
     "shortlisted": "Shortlisted",
+    "waiting": "Waiting on you",
     "applied": "Applied",
     "skipped": "Skipped",
     "closed": "Closed",
@@ -146,6 +147,8 @@ class App:
             stmt = stmt.where(Job.id.in_(applied))
         elif view == "closed":
             stmt = stmt.where(Job.closed, ~Job.id.in_(applied))
+        elif view == "waiting":
+            stmt = stmt.where(Job.apply_progress.is_not(None), ~Job.id.in_(applied))
         else:
             decisions = {"todo": ("new", "shortlisted"), "shortlisted": ("shortlisted",), "skipped": ("skipped",)}[view]
             stmt = stmt.where(~Job.closed, ~Job.id.in_(applied), Job.decision.in_(decisions))
@@ -163,6 +166,22 @@ class App:
         if state.startswith("failed"):
             return '<span class="tag bad">resume failed</span>'
         return '<span class="tag">resume ready</span>' if j.kit_resume_path else ""
+
+    @staticmethod
+    def progress(j: Job) -> dict:
+        try:
+            return json.loads(j.apply_progress) if j.apply_progress else {}
+        except ValueError:
+            return {}
+
+    def progress_tag(self, j: Job) -> str:
+        """Where Fill to Review left the application: at Review for you to submit, or stopped on a question."""
+        p = self.progress(j)
+        if p.get("state") == "review":
+            return f'<span class="tag ok" title="{_e(p.get("note", ""))}">at Review: submit it</span>'
+        if p.get("state") == "needs_you":
+            return f'<span class="tag warn" title="{_e(p.get("note", ""))}">needs you: {_e(p.get("step", ""))}</span>'
+        return ""
 
     def list_page(self, params: dict, flash: str = "", user: str = "") -> str:
         view = params.get("view", "todo") if params.get("view") in VIEWS else "todo"
@@ -188,7 +207,7 @@ class App:
                 actions = f"<a class='btn primary' href='{_e(j.job_url)}' target='_blank' rel='noopener'>Apply</a> " + actions
             rows.append(
                 f"<tr><td class='num muted'>{i}</td><td class='num'><b>{j.overall_score:.0f}</b></td>"
-                f"<td><a href='/job/{j.id}'>{_e(j.title)}</a>{star}{kind}{self.resume_state(j)}{warn}</td><td>{_e(j.company)}</td>"
+                f"<td><a href='/job/{j.id}'>{_e(j.title)}</a>{star}{kind}{self.resume_state(j)}{self.progress_tag(j)}{warn}</td><td>{_e(j.company)}</td>"
                 f"<td class='muted'>{_e(j.location)}</td><td class='muted'>{_ago(j.date_posted)}</td>"
                 f"<td class='num'>{sponsor}</td><td class='num muted'>{j.match_score:.0f}</td><td>{actions}</td></tr>")
         table = ("<div class='tablewrap'><table><tr><th>#</th><th>Score</th><th>Job</th><th>Company</th><th>Location</th><th>Posted</th>"
@@ -259,7 +278,14 @@ class App:
             return f"<form class='inline' method='post' action='/{action}/{j.id}'><button{disabled}>{label}</button></form> "
         kit_btns = (post("resume", "Regenerate resume" if j.kit_resume_path else "Generate resume")
                     + post("cover", "Rewrite cover note" if j.kit_cover_path else "Write cover note"))
-        body = (
+        prog = self.progress(j)
+        waiting = ""
+        if prog and not apps:
+            where = (f" <a href='{_e(prog['url'])}' target='_blank' rel='noopener'>Open the application</a>"
+                     if str(prog.get("url", "")).startswith("http") else "")
+            waiting = (f"<div class='flash'><b>At Review: check it and submit.</b>{where}</div>" if prog.get("state") == "review" else
+                       f"<div class='flash'><b>Needs you at {_e(prog.get('step', ''))}:</b> {_e(prog.get('note', ''))}{where}</div>")
+        body = waiting + (
             f"<div class='card'><h2 style='margin:0 0 4px'>{_e(j.title)}</h2>"
             f"<div><b>{_e(j.company)}</b> &middot; {_e(j.location)} &middot; {_e((j.job_type or '').replace('_', '-'))} "
             f"&middot; posted {_ago(j.date_posted)} &middot; source {_e(j.source)}</div>"
@@ -852,7 +878,7 @@ def make_handler(app: App, port: int):
 
         # ---- API for the Chrome extension (X-Extension-Key)
         def api_extension(self, method: str, path: str, params: dict):
-            from jobhunter.answers import EXCLUDE, FIELDS, SENSITIVE, found_via, generalize, work_history
+            from jobhunter.answers import EXCLUDE, FIELDS, SENSITIVE, found_via, generalize, skills, work_history
 
             key = app.tracker.setting("extension_key")
             if not key or not hmac.compare_digest(self.headers.get("X-Extension-Key", ""), key):
@@ -881,7 +907,8 @@ def make_handler(app: App, port: int):
                         "fields": [{"key": k, "label": label, "keywords": kw, "exclude": EXCLUDE.get(k, []),
                                     "value": values[k]}
                                    for k, label, kw in FIELDS if k in saved and values.get(k)],
-                        "history": work_history(app.resume_text()),
+                        "history": {**work_history(app.resume_text()),
+                                    "skills": skills(app.resume_text(), (job.description or "") if job else "")},
                         "answers": [{"question": a.question, "answer": a.answer}
                                     for a in app.tracker.answers() if not a.field],
                         "sensitive": SENSITIVE.pattern,
@@ -922,6 +949,14 @@ def make_handler(app: App, port: int):
                     app.tracker.add_feedback(int(parts[1]), str(data.get("instructions", "")))
                     app.worker.submit(int(parts[1]), "resume")
                     return self.send_json({"queued": True})
+                if method == "POST" and len(parts) == 2 and parts[0] == "progress" and parts[1].isdigit():
+                    state = str(data.get("state", ""))
+                    if state not in ("review", "needs_you", "clear"):
+                        return self.send_json({"error": "state must be review, needs_you or clear"}, 400)
+                    app.tracker.set_progress(int(parts[1]), None if state == "clear" else {
+                        "state": state, "step": str(data.get("step", ""))[:80], "note": str(data.get("note", ""))[:500],
+                        "url": str(data.get("url", ""))[:1000], "at": datetime.now(timezone.utc).isoformat()})
+                    return self.send_json({"saved": True})
                 if method == "POST" and len(parts) == 2 and parts[0] == "applied" and parts[1].isdigit():
                     a = app.tracker.log_application(int(parts[1]))
                     return self.send_json({"application_id": a.id, "resume": a.resume_path, "cover": a.cover_note_path})

@@ -6,7 +6,7 @@
 // Which answer and option to use comes from matching.js (injected first). Every value is read back
 // after filling: one the page didn't keep is reported as skipped, not filled.
 (() => {
-  const VERSION = 10;
+  const VERSION = 11;
   if (window.__jobHunterApi && window.__jobHunterApi.version >= VERSION) return;
   const M = window.__jobHunterMatch;
   if (!M) throw new Error("Job Hunter: matching.js must be injected before content.js");
@@ -113,8 +113,19 @@
     el.dispatchEvent(new Event("change", { bubbles: true }));
     el.dispatchEvent(new Event("blur", { bubbles: true }));
   }
-  const key = (el, k) => ["keydown", "keyup"].forEach((t) =>
-    el.dispatchEvent(new KeyboardEvent(t, { key: k, code: k, keyCode: k === "Enter" ? 13 : 27, bubbles: true })));
+  // Workday's search boxes search only on a full Enter (keydown, keypress, keyup).
+  function key(el, k) {
+    const code = k === "Enter" ? 13 : 27;
+    for (const t of k === "Enter" ? ["keydown", "keypress", "keyup"] : ["keydown", "keyup"]) {
+      el.dispatchEvent(new KeyboardEvent(t, { key: k, code: k, keyCode: code, which: code,
+                                              charCode: t === "keypress" ? code : 0, bubbles: true, cancelable: true }));
+    }
+  }
+  // Text typed into a search box (no change/blur, which would close it).
+  function typeSearch(el, text) {
+    Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, "value").set.call(el, text);
+    el.dispatchEvent(new InputEvent("input", { bubbles: true, inputType: text ? "insertText" : "deleteContentBackward", data: text || null }));
+  }
   function press(el) {
     for (const t of ["pointerdown", "mousedown", "pointerup", "mouseup", "click"]) {
       el.dispatchEvent(new MouseEvent(t, { bubbles: true, cancelable: true, view: window }));
@@ -254,31 +265,94 @@
     return { reason: "dropped", saw: all.length };
   }
 
-  // A search-and-pick box with candidate answers: browse the list (and its categories); only a list
-  // that showed nothing is searched by typing a few short words ("career", "website").
+  // A search-and-pick box with candidate answers: browse the list (and its categories); if no option
+  // fits, search by typing. Long lists (Field of Study) render only their first few options, so
+  // the first candidates are searched whole ("Applied Data Science"), then a few short words.
   async function chooseFromPromptAny(input, values, label) {
     const browsed = await browsePrompt(input, values, label);
-    if (browsed.text) return browsed;
-    if (browsed.saw) return { reason: browsed.reason };
-    const words = [...new Set(values.flatMap((v) => M.norm(v).split(" ")).filter((w) => w.length >= 4))].slice(0, 4);
+    if (browsed.text || browsed.reason === "ambiguous") return browsed;
+    const words = [...new Set([...values.slice(0, 4).map(M.norm),
+      ...(browsed.saw ? [] : values.flatMap((v) => M.norm(v).split(" ")).filter((w) => w.length >= 4))])].slice(0, 8);
     let reason = browsed.reason || "unmatched";
     for (const word of words) {
       const before = new Set(optionEls());
       input.focus();
-      setValue(input, word);
+      typeSearch(input, word);
       key(input, "Enter");
       await sleep(400);
-      const r = pickAny(await waitForOptions(2500, before), values, label);
+      const opts = await waitForOptions(2500, before);
+      // A search with a single result is chosen by Workday itself: keep it only if it's a candidate.
+      const auto = [...new Set(selectedItems(input).map((li) => clean(li.innerText)).filter(Boolean))];
+      if (auto.length) {
+        const ok = pickAny(auto.map((text) => ({ text })), values, label);
+        if (ok.option) return { text: ok.option.text, value: ok.value };
+        await unselect(input);
+        continue;
+      }
+      const r = pickAny(opts, values, label);
       if (r.option) {
         press(leafNode(r.option.el));
         await sleep(500);
-        if (hasSelection(input)) return { text: r.option.text };
+        if (hasSelection(input)) return { text: r.option.text, value: r.value };
       } else if (r.reason === "ambiguous") reason = "ambiguous";
-      setValue(input, "");
+      typeSearch(input, "");
       key(input, "Escape");
       await sleep(200);
     }
     return { reason };
+  }
+
+  // A skills picker (Workday "Type to Add Skills"): search each of your resume skills and keep only
+  // an option that is that skill: "Python (Programming Language)", "Structured Query Language (SQL)",
+  // never a lookalike ("Python IDLE", "U-SQL").
+  const sameSkill = (option, name) => {
+    const n = M.norm(name), m = option.match(/^(.*?)\s*\(([^)]*)\)\s*$/);
+    return !!n && [option, ...(m ? [m[1], m[2]] : [])].some((t) => M.norm(t) === n);
+  };
+  const chosenTexts = (input) => [...new Set(selectedItems(input).map((li) => clean(li.innerText)).filter(Boolean))];
+  async function addSkills(input, names) {
+    const added = [];
+    for (const name of names.slice(0, 10)) {
+      const before = chosenTexts(input);
+      const shown = new Set(optionEls());
+      input.focus();
+      typeSearch(input, name);
+      key(input, "Enter");
+      await sleep(400);
+      const opts = await waitForOptions(2500, shown);
+      const fresh = chosenTexts(input).filter((t) => !before.includes(t));
+      if (fresh.length) { // Workday chose the only result itself
+        const keep = fresh.filter((t) => sameSkill(t, name));
+        added.push(...keep);
+        removeChosen(input, fresh.filter((t) => !keep.includes(t)));
+      } else {
+        const hit = opts.filter((o) => sameSkill(o.text, name));
+        if (hit.length === 1) {
+          press(leafNode(hit[0].el));
+          await sleep(500);
+          if (chosenTexts(input).length > before.length) added.push(hit[0].text);
+        }
+      }
+      typeSearch(input, "");
+      key(input, "Escape");
+      await sleep(250);
+    }
+    return added;
+  }
+  function removeChosen(input, texts) {
+    for (const li of formField(input)?.querySelectorAll('[data-automation-id="selectedItemList"] [data-automation-id="selectedItem"]') || []) {
+      const x = li.querySelector('[data-automation-id="DELETE_charm"]');
+      if (x && texts.includes(clean(li.innerText))) press(x);
+    }
+  }
+
+  // Remove what a search box chose (Workday's "x" on the chosen item).
+  async function unselect(input) {
+    const ff = formField(input) || input.parentElement;
+    for (const x of ff.querySelectorAll('[data-automation-id="selectedItemList"] [data-automation-id="DELETE_charm"]')) press(x);
+    typeSearch(input, "");
+    key(input, "Escape");
+    await sleep(400);
   }
 
   // Why a question was left for you, shown in the side panel.
@@ -407,6 +481,11 @@
         continue;
       }
       if (hasSelection(el) || hasValue(el)) continue; // never overwrite what's there
+      if (isPrompt(el) && /\bskills\b/i.test(label) && ctx.history?.skills?.length) {
+        const added = await addSkills(el, ctx.history.skills);
+        if (added.length) note(label, added.join(", "), "your resume skills", () => hasSelection(el));
+        continue;
+      }
       const ans = answer(label);
       const d = ans.status === "none" && isPrompt(el) ? M.derived(label, ctx) : null; // "how did you hear"
       if (d) {
@@ -507,8 +586,58 @@
     return out;
   }
 
+  // Autopilot: Workday's "Save and Continue" between steps, up to Review. Only the footer's
+  // next button, only with one of these labels; anything that reads like submit is never clicked.
+  const NEXT_IDS = ["pageFooterNextButton", "bottom-navigation-next-button"];
+  const NEXT_TEXT = /^(save and continue|next|continue)$/i;
+  const FINAL = /submit|apply|send|finish|confirm/i;
+
+  // {n: 2, of: 5, name: "My Experience"} from Workday's progress bar, or null on other sites.
+  function step() {
+    const active = document.querySelector('[data-automation-id="progressBarActiveStep"]');
+    const m = active && clean(active.innerText).match(/step (\d+) of (\d+)\s*(.*)$/i);
+    return m ? { n: +m[1], of: +m[2], name: m[3].trim() } : null;
+  }
+  const atReview = (s) => !!s && (/^review$/i.test(s.name) || s.n === s.of);
+  function nextButton() {
+    const b = NEXT_IDS.map((id) => document.querySelector(`[data-automation-id="${id}"]`)).find((x) => x && visible(x));
+    const text = b ? clean(b.innerText) : "";
+    return b && !b.disabled && NEXT_TEXT.test(text) && !FINAL.test(text) ? b : null;
+  }
+  const pageErrors = () => [...document.querySelectorAll('[data-automation-id*="error" i], [role=alert]')]
+    .filter(visible).map((e) => clean(e.innerText)).filter(Boolean).slice(0, 6);
+  // A resume field with nothing in it yet (Workday lists uploaded files as file-upload-item).
+  const needsResume = () => !!document.querySelector('input[type="file"]') &&
+    !document.querySelector('[data-automation-id="file-upload-item"]');
+
+  function status() {
+    const s = step();
+    return { workday: !!s, step: s, review: atReview(s), next: !!nextButton(), needsResume: needsResume(),
+             errors: pageErrors() };
+  }
+
+  // Press "Save and Continue" once and wait for the next step. Re-checks the button right before
+  // the click; reports the page's errors if it stayed put.
+  async function next() {
+    const s = step();
+    if (!s || atReview(s)) return { moved: false, reason: s ? "review" : "not a Workday application" };
+    const b = nextButton();
+    if (!b) return { moved: false, reason: "no Save and Continue button" };
+    b.click();
+    for (let i = 0; i < 80; i++) {
+      await sleep(250);
+      const now = step();
+      if (now && now.n !== s.n) { await sleep(1500); return { moved: true, step: now }; } // let the step render
+      const errors = pageErrors();
+      if (errors.length && i > 4) return { moved: false, errors };
+    }
+    return { moved: false, reason: "the page didn't move on", errors: pageErrors() };
+  }
+
   // Called by the side panel in every frame of the page (forms are often in an embedded frame).
   window.__jobHunterApi = {
+    status: () => status(),
+    next: () => next(),
     version: VERSION,
     questions: () => ({ questions: questions(), title: document.title }),
     fill: (ctx) => fill(ctx),

@@ -73,6 +73,8 @@ class Job(Base):
     kit_notes: Mapped[str | None] = mapped_column(Text)  # ATS score and checks for the tailored resume
     kit_feedback: Mapped[str | None] = mapped_column(Text)  # your change requests, one per line, reused on regenerate
     outreach: Mapped[str | None] = mapped_column(Text)  # JSON: drafts of messages to people at the company
+    # JSON from the extension's Fill to Review: {state: "review" | "needs_you", step, note, at, url}
+    apply_progress: Mapped[str | None] = mapped_column(Text)
     # Times the posting came back after it was taken down, or was re-posted with a newer date: a role
     # that's hard to fill, or an old opening kept alive.
     reposts: Mapped[int] = mapped_column(Integer, default=0)
@@ -178,7 +180,7 @@ _ADDED_COLUMNS = {
         "job_type": "VARCHAR(20)", "sponsorship_warning": "VARCHAR(300)", "last_seen": "DATETIME",
         "closed": "BOOLEAN DEFAULT 0", "decision": "VARCHAR(20) DEFAULT 'new'",
         "kit_resume_path": "VARCHAR(500)", "kit_cover_path": "VARCHAR(500)", "kit_notes": "TEXT", "kit_feedback": "TEXT", "outreach": "TEXT",
-        "reposts": "INTEGER DEFAULT 0",
+        "apply_progress": "TEXT", "reposts": "INTEGER DEFAULT 0",
     },
     "applications": {"cover_note_path": "VARCHAR(500)"},
 }
@@ -329,6 +331,17 @@ class Tracker:
                 job.outreach = json.dumps(drafts)
                 s.commit()
 
+    def set_progress(self, job_id: int, progress: dict | None) -> None:
+        """Where Fill to Review left an application: at Review for you to submit, or stopped on a
+        question you need to answer. None clears it (you submitted)."""
+        import json
+
+        with self.Session() as s:
+            job = s.get(Job, job_id)
+            if job is not None:
+                job.apply_progress = json.dumps(progress) if progress else None
+                s.commit()
+
     def clear_feedback(self, job_id: int) -> None:
         with self.Session() as s:
             job = s.get(Job, job_id)
@@ -359,6 +372,7 @@ class Tracker:
                 raise ValueError(f"No job with id {job_id}")
             app = Application(job_id=job_id, resume_path=resume_path or job.kit_resume_path, notes=notes or None,
                               cover_note_path=cover_note_path or job.kit_cover_path)
+            job.apply_progress = None  # submitted: no longer waiting on you
             s.add(app)
             s.commit()
             return app

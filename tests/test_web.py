@@ -243,3 +243,22 @@ def test_follow_ups_and_people_links(server):
     page = httpx.get(f"{base}/applications").text
     assert "Follow up" in page and "9 days" in page and "Acme+Syracuse+University" in page
     assert "Syracuse alumni" in httpx.get(f"{base}/job/{job.id}").text
+
+
+def test_fill_to_review_progress_shows_until_you_submit(server):
+    base, app = server()
+    ingest(base, ["Acme", "Beta"])
+    acme, beta = sorted(app.tracker.top_jobs(limit=5), key=lambda j: j.company)
+    h = {"X-Extension-Key": app.extension_key()}
+    assert httpx.post(f"{base}/api/x/progress/{acme.id}", json={"state": "submitted"}, headers=h).status_code == 400
+    httpx.post(f"{base}/api/x/progress/{acme.id}", json={"state": "review", "step": "Review", "url": "https://x.test/apply"}, headers=h)
+    httpx.post(f"{base}/api/x/progress/{beta.id}", json={"state": "needs_you", "step": "Application Questions",
+                                                         "note": "Salary expectation"}, headers=h)
+    waiting = httpx.get(f"{base}/?view=waiting").text
+    assert "at Review: submit it" in waiting and "needs you: Application Questions" in waiting
+    assert "Needs you at Application Questions:</b> Salary expectation" in httpx.get(f"{base}/job/{beta.id}").text
+    httpx.post(f"{base}/api/x/applied/{acme.id}", json={}, headers=h)  # submitted: no longer waiting
+    waiting = httpx.get(f"{base}/?view=waiting").text
+    assert "at Review" not in waiting and "needs you" in waiting
+    httpx.post(f"{base}/api/x/progress/{beta.id}", json={"state": "clear"}, headers=h)
+    assert app.tracker.get_job(beta.id).apply_progress is None
