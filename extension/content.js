@@ -6,7 +6,7 @@
 // Which answer and option to use comes from matching.js (injected first). Every value is read back
 // after filling: one the page didn't keep is reported as skipped, not filled.
 (() => {
-  const VERSION = 8;
+  const VERSION = 10;
   if (window.__jobHunterApi && window.__jobHunterApi.version >= VERSION) return;
   const M = window.__jobHunterMatch;
   if (!M) throw new Error("Job Hunter: matching.js must be injected before content.js");
@@ -321,7 +321,36 @@
     return sec.n > 1 ? null : undefined; // e.g. Education 2: yours to fill
   }
 
+  // Repeated sections (Workday "Work Experience", "Education", "Websites") start empty behind an
+  // "Add" button. Add as many entries as your record has; "Add" only creates an empty entry.
+  // Never more than the record holds, never removes one, and only buttons labelled exactly "Add".
+  async function addSections(ctx) {
+    const links = (ctx.fields || []).filter((f) => ["linkedin", "github", "website"].includes(f.key) && f.value);
+    const want = { "work experience": (ctx.history?.jobs || []).length,
+                   education: (ctx.fields || []).some((f) => f.key === "school") ? 1 : 0,
+                   websites: links.length };
+    const added = [];
+    for (const g of document.querySelectorAll("[role=group][aria-labelledby]")) {
+      const title = clean(textOf(g.getAttribute("aria-labelledby"))).toLowerCase();
+      if (!want[title]) continue;
+      const entries = () => [...g.querySelectorAll("[role=group][aria-labelledby]")]
+        .filter((s) => /\s\d+$/.test(clean(textOf(s.getAttribute("aria-labelledby"))))).length;
+      for (let guard = 0; entries() < want[title] && guard < 6; guard++) {
+        const btn = [...g.querySelectorAll("button")].filter(visible).find((b) => /^add( another)?$/i.test(clean(b.innerText)));
+        if (!btn) break;
+        const before = entries();
+        btn.click();
+        for (let i = 0; i < 20 && entries() === before; i++) await sleep(150);
+        if (entries() === before) break;
+        added.push(title);
+      }
+    }
+    if (added.length) await sleep(600);
+    return added;
+  }
+
   async function fill(ctx) {
+    await addSections(ctx);
     const sensitive = new RegExp(ctx.sensitive, "i");
     const done = [], skipped = [];
     const doneRadio = new Set();

@@ -149,3 +149,14 @@ test("Comcast-style list: the company's job alert comes before 'Other Job Site'"
   const first = d.values.find((v) => M.resolveOption(opts, v).status === "matched");
   assert.equal(opts[M.resolveOption(opts, first).index], "Comcast Job Alert");
 });
+
+test("field of study: your major, else Data Science, else Information Systems", () => {
+  const ctx = { ...withJob(), history: { jobs: [], education: [{ major: "Applied Data Science" }] } };
+  const d = M.derived("Field of Study", ctx);
+  const pick = (opts) => { const v = d.values.find((x) => M.resolveOption(opts, x, "Field of Study").status === "matched");
+                           return v && opts[M.resolveOption(opts, v, "Field of Study").index]; };
+  assert.equal(pick(["Accounting", "Applied Data Science", "Data Science"]), "Applied Data Science");
+  assert.equal(pick(["Accounting", "Data Science", "Information Systems"]), "Data Science");
+  assert.equal(pick(["Accounting", "Computer Science", "Information Systems"]), "Information Systems");
+  assert.equal(M.derived("Field of Study", withJob()), null); // no degree on record
+});

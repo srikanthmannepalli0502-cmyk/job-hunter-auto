@@ -192,6 +192,8 @@
       r = pick((t) => t.includes(a));
       if (r) return r;
     }
+    // "Data Science" is not "Computer Science": a field of study never matches on shared words.
+    if (/\b(field of study|major|area of study|discipline)\b/.test(norm(label))) return { status: "unmatched" };
     const scores = options.map((o) => similarity(o, answer));
     const best = Math.max(0, ...scores);
     return best >= 0.5 ? pick((t, i) => scores[i] === best) : { status: "unmatched" };
@@ -225,6 +227,14 @@
     if (BEFORE.test(l) && EMPLOYED.test(l) && !RELATED.test(l) && /\bthe company\b|\bus\b/.test(l)) {
       const mine = (ctx.history?.jobs || []).map((j) => norm(generalize(j.company, job.company)));
       return { values: [mine.some((c) => c.includes("the company")) ? "Yes" : "No"], from: "your work history" };
+    }
+    if (/\b(field of study|major|area of study|discipline)\b/.test(l)) {
+      const major = (ctx.fields || []).find((f) => f.key === "major")?.value || ctx.history?.education?.[0]?.major;
+      if (!major) return null;
+      // Most lists lack "Applied Data Science": the plain field, then the nearest broader one.
+      const values = [major, major.replace(/^(applied|general)\s+/i, "")];
+      if (/data science|analytics/i.test(major)) values.push("Data Science", "Information Systems", "Information Science");
+      return { values: [...new Set(values)], from: "your degree (closest option)" };
     }
     if (/\bphone (device )?type\b|\btype of phone\b/.test(l)) {
       return { values: ["Mobile", "Cell", "Cell Phone", "Mobile Phone"], from: "your phone (mobile)" };

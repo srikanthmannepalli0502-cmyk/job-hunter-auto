@@ -105,7 +105,32 @@ def work_history(resume_text: str) -> dict:
         jobs.append({"title": title, "company": company.replace(", TCS", "").strip(), "start": mm_yyyy(start),
                      "end": "" if current else mm_yyyy(end), "current": current,
                      "description": "\n".join(f"- {b}" for b in e.bullets)})
-    return {"jobs": jobs}
+    return {"jobs": jobs, "education": education(resume_text)}
+
+
+def education(resume_text: str) -> list[dict]:
+    """Degrees under EDUCATION: 'Syracuse University  Dec 2026' then "Master's, Applied Data Science | GPA: 3.67/4.0"
+    -> [{school, degree, major, gpa, end}]."""
+    lines = resume_text.splitlines()
+    start = next((i for i, l in enumerate(lines) if l.strip().upper() == "EDUCATION"), None)
+    if start is None:
+        return []
+    out = []
+    for line in lines[start + 1:]:
+        line = line.strip()
+        if not line or line.lower().startswith("coursework"):
+            continue
+        if line.isupper() and len(line.split()) <= 4:  # next section heading
+            break
+        deg = re.match(r"(.+?),\s*([^|]+?)(?:\s*\|\s*GPA:?\s*([\d.]+))?(?:/[\d.]+)?$", line)
+        if out and not out[-1]["degree"] and deg:
+            out[-1].update(degree=deg.group(1).strip(), major=deg.group(2).strip(), gpa=deg.group(3) or "")
+            continue
+        school = re.match(r"(.+?)\s{2,}(.+)$", line)
+        if school:
+            out.append({"school": school.group(1).strip(), "end": school.group(2).strip(),
+                        "degree": "", "major": "", "gpa": ""})
+    return out
 
 # Form questions the extension must never fill or learn.
 SENSITIVE = re.compile(

@@ -79,7 +79,7 @@ async function preview(which) {
 async function attachFile(which) {
   if (!previewed.has(`${which}:${ctx.job.id}`)) {
     await preview(which);
-    $("fillResult").innerHTML = `<span class="warn">Opened the ${which} in a new tab. Read it, then click Attach again to upload it.</span>`;
+    $("attachResult").innerHTML = `<span class="warn">Opened the ${which} in a new tab. Read it, then click Attach again to upload it.</span>`;
     return;
   }
   const resp = await api(`/api/x/${which}/${ctx.job.id}`, { raw: true });
@@ -90,13 +90,13 @@ async function attachFile(which) {
   const mime = resp.headers.get("Content-Type") || "application/pdf";
   const frames = await inPage("attach", { base64: btoa(bin), filename, mime, which });
   const ok = frames.some((f) => f.attached);
-  $("fillResult").innerHTML = ok
+  $("attachResult").innerHTML = ok
     ? `<span class="ok">Attached ${esc(filename)}.</span> Check the page shows it.`
     : `<span class="warn">No ${which} upload field found on this page (some sites only show it after you click "Upload").</span>`;
 }
-$("previewResume").addEventListener("click", () => preview("resume").catch((e) => ($("fillResult").textContent = e.message)));
-$("attachResume").addEventListener("click", () => attachFile("resume").catch((e) => ($("fillResult").textContent = e.message)));
-$("attachCover").addEventListener("click", () => attachFile("cover").catch((e) => ($("fillResult").textContent = e.message)));
+$("previewResume").addEventListener("click", () => preview("resume").catch((e) => ($("attachResult").textContent = e.message)));
+$("attachResume").addEventListener("click", () => attachFile("resume").catch((e) => ($("attachResult").textContent = e.message)));
+$("attachCover").addEventListener("click", () => attachFile("cover").catch((e) => ($("attachResult").textContent = e.message)));
 
 $("collect").addEventListener("click", async () => {
   if (!ctx) return;
