@@ -25,6 +25,21 @@ def _aware(dt: datetime | None) -> datetime | None:
     return dt.replace(tzinfo=timezone.utc) if dt is not None and dt.tzinfo is None else dt
 
 
+REPOST_GAP_DAYS = 7
+REPOST_ABSENT_DAYS = 10
+
+
+def _reposted(row: "Job", listing: JobListing) -> bool:
+    """A known job is back after being gone 10+ days (a board that failed for a day or two closes
+    jobs too, so a short absence doesn't count), or carries a posting date a week or more newer than
+    the one stored. Same-day listings of one role in several cities share a row and a date."""
+    last = _aware(row.last_seen)
+    if row.closed and last and _now() - last >= timedelta(days=REPOST_ABSENT_DAYS):
+        return True
+    old, new = _aware(row.date_posted), _aware(listing.date_posted)
+    return bool(old and new and new - old >= timedelta(days=REPOST_GAP_DAYS))
+
+
 class Base(DeclarativeBase):
     pass
 
@@ -58,6 +73,9 @@ class Job(Base):
     kit_notes: Mapped[str | None] = mapped_column(Text)  # ATS score and checks for the tailored resume
     kit_feedback: Mapped[str | None] = mapped_column(Text)  # your change requests, one per line, reused on regenerate
     outreach: Mapped[str | None] = mapped_column(Text)  # JSON: drafts of messages to people at the company
+    # Times the posting came back after it was taken down, or was re-posted with a newer date: a role
+    # that's hard to fill, or an old opening kept alive.
+    reposts: Mapped[int] = mapped_column(Integer, default=0)
 
 
 class Application(Base):
@@ -71,6 +89,27 @@ class Application(Base):
     applied_date: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_now)
     updated_date: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_now)
     notes: Mapped[str | None] = mapped_column(Text)
+
+
+STAGE_KINDS = ("recruiter screen", "hiring manager", "technical", "take-home", "panel / onsite", "final", "other")
+STAGE_OUTCOMES = ("pending", "passed", "rejected", "withdrew")
+
+
+class InterviewStage(Base):
+    """One step of an application's interviews: what it was, when, with whom, and how it went.
+    The idea follows jobsync's job stages (MIT)."""
+
+    __tablename__ = "interview_stages"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    application_id: Mapped[int] = mapped_column(ForeignKey("applications.id"), index=True)
+    kind: Mapped[str] = mapped_column(String(30), default="other")
+    happened: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    format: Mapped[str | None] = mapped_column(String(100))  # phone, video, onsite...
+    interviewers: Mapped[str | None] = mapped_column(String(300))
+    outcome: Mapped[str] = mapped_column(String(20), default="pending")
+    notes: Mapped[str | None] = mapped_column(Text)  # questions asked, what to prepare next
+    created: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_now)
 
 
 class Run(Base):
@@ -101,6 +140,30 @@ class Answer(Base):
     updated: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_now)
 
 
+class ConfirmedSkill(Base):
+    """A skill you confirmed you have ("I have this") that your master resume doesn't name; resumes
+    may list it under SKILLS, and you'll want to be ready to talk about it."""
+
+    __tablename__ = "confirmed_skills"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    term: Mapped[str] = mapped_column(String(100), unique=True)
+    created: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_now)
+
+
+class Connection(Base):
+    """Someone you're connected to on LinkedIn, from the Connections.csv you uploaded."""
+
+    __tablename__ = "connections"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    name: Mapped[str] = mapped_column(String(200))
+    company: Mapped[str] = mapped_column(String(255))
+    company_key: Mapped[str] = mapped_column(String(255), index=True)
+    position: Mapped[str | None] = mapped_column(String(255))
+    url: Mapped[str | None] = mapped_column(String(500))
+
+
 class Setting(Base):
     __tablename__ = "settings"
 
@@ -115,6 +178,7 @@ _ADDED_COLUMNS = {
         "job_type": "VARCHAR(20)", "sponsorship_warning": "VARCHAR(300)", "last_seen": "DATETIME",
         "closed": "BOOLEAN DEFAULT 0", "decision": "VARCHAR(20) DEFAULT 'new'",
         "kit_resume_path": "VARCHAR(500)", "kit_cover_path": "VARCHAR(500)", "kit_notes": "TEXT", "kit_feedback": "TEXT", "outreach": "TEXT",
+        "reposts": "INTEGER DEFAULT 0",
     },
     "applications": {"cover_note_path": "VARCHAR(500)"},
 }
@@ -160,6 +224,9 @@ class Tracker:
                 if row is not None:
                     if j.dedupe_key not in fresh:
                         seen_again += 1
+                        if _reposted(row, j):
+                            row.reposts = (row.reposts or 0) + 1
+                            row.date_posted = j.date_posted or row.date_posted
                     row.last_seen, row.closed = now, False
                     # Scores can change (new sponsor data, profile edits); keep the latest.
                     row.match_score, row.sponsor_score = j.match_score, j.sponsor_score
@@ -191,6 +258,26 @@ class Tracker:
                 job.closed = True
             s.commit()
             return len(stale)
+
+    def close_jobs(self, dedupe_keys: list[str] | None = None, job_ids: list[int] | None = None) -> int:
+        """Mark these jobs closed now (their posting says the role is filled, or its page is gone)."""
+        if not dedupe_keys and not job_ids:
+            return 0
+        with self.Session() as s:
+            q = select(Job).where(~Job.closed)
+            q = q.where(Job.dedupe_key.in_(dedupe_keys)) if dedupe_keys else q.where(Job.id.in_(job_ids))
+            rows = list(s.scalars(q))
+            for job in rows:
+                job.closed = True
+            s.commit()
+            return len(rows)
+
+    def open_shortlist(self, sources: tuple[str, ...]) -> list[Job]:
+        """Open shortlisted jobs you haven't applied to, from these sources."""
+        with self.Session() as s:
+            q = select(Job).where(~Job.closed, Job.decision == "shortlisted", Job.source.in_(sources),
+                                  ~Job.id.in_(select(Application.job_id)))
+            return list(s.scalars(q))
 
     def get_job(self, job_id: int) -> Job | None:
         with self.Session() as s:
@@ -290,6 +377,56 @@ class Tracker:
             s.commit()
             return app
 
+    # ---- interview stages
+    def stages(self, app_id: int) -> list[InterviewStage]:
+        with self.Session() as s:
+            q = select(InterviewStage).where(InterviewStage.application_id == app_id)
+            return list(s.scalars(q.order_by(InterviewStage.happened.is_(None), InterviewStage.happened,
+                                             InterviewStage.id)))
+
+    def stage_counts(self) -> dict[int, int]:
+        from sqlalchemy import func
+
+        with self.Session() as s:
+            q = select(InterviewStage.application_id, func.count()).group_by(InterviewStage.application_id)
+            return dict(s.execute(q).all())
+
+    def add_stage(self, app_id: int, kind: str, happened: datetime | None = None, format: str = "",
+                  interviewers: str = "", outcome: str = "pending", notes: str = "") -> InterviewStage:
+        """Record an interview step. An application still at "applied" moves to "interview"."""
+        if kind not in STAGE_KINDS:
+            raise ValueError(f"kind must be one of {STAGE_KINDS}")
+        if outcome not in STAGE_OUTCOMES:
+            raise ValueError(f"outcome must be one of {STAGE_OUTCOMES}")
+        with self.Session() as s:
+            app = s.get(Application, app_id)
+            if app is None:
+                raise ValueError(f"No application with id {app_id}")
+            stage = InterviewStage(application_id=app_id, kind=kind, happened=happened, format=format.strip()[:100] or None,
+                                   interviewers=interviewers.strip()[:300] or None, outcome=outcome,
+                                   notes=notes.strip()[:5000] or None)
+            s.add(stage)
+            if app.status == "applied":
+                app.status, app.updated_date = "interview", _now()
+            s.commit()
+            return stage
+
+    def set_stage_outcome(self, stage_id: int, outcome: str) -> InterviewStage:
+        if outcome not in STAGE_OUTCOMES:
+            raise ValueError(f"outcome must be one of {STAGE_OUTCOMES}")
+        with self.Session() as s:
+            stage = s.get(InterviewStage, stage_id)
+            if stage is None:
+                raise ValueError(f"No interview stage with id {stage_id}")
+            stage.outcome = outcome
+            s.commit()
+            return stage
+
+    def get_application(self, app_id: int) -> tuple[Application, Job] | None:
+        with self.Session() as s:
+            app = s.get(Application, app_id)
+            return (app, s.get(Job, app.job_id)) if app else None
+
     def applications(self) -> list[tuple[Application, Job]]:
         with self.Session() as s:
             q = select(Application, Job).join(Job, Application.job_id == Job.id)
@@ -339,6 +476,55 @@ class Tracker:
             if row is not None:
                 s.delete(row)
                 s.commit()
+
+    # ---- your LinkedIn connections
+    def replace_connections(self, rows: list[dict]) -> int:
+        """Replace the stored connections with a fresh export. Returns how many were stored."""
+        from jobhunter.connections import company_key
+
+        with self.Session() as s:
+            s.query(Connection).delete()
+            s.add_all(Connection(company_key=company_key(r["company"]), **r) for r in rows)
+            s.commit()
+        return len(rows)
+
+    def connection_count(self) -> int:
+        from sqlalchemy import func
+
+        with self.Session() as s:
+            return s.scalar(select(func.count()).select_from(Connection)) or 0
+
+    def connections_at(self, company: str) -> list[Connection]:
+        from jobhunter.connections import company_key, same_company
+
+        key = company_key(company)
+        if not key:
+            return []
+        first = key.split()[0]
+        with self.Session() as s:
+            q = select(Connection).where(Connection.company_key.like(first + "%")).order_by(Connection.name)
+            return [c for c in s.scalars(q) if same_company(c.company, company)]
+
+    # ---- skills you confirmed
+    def confirmed_skills(self) -> list[str]:
+        with self.Session() as s:
+            return [r.term for r in s.scalars(select(ConfirmedSkill).order_by(ConfirmedSkill.term))]
+
+    def confirm_skill(self, term: str) -> None:
+        term = " ".join((term or "").split())[:100]
+        if not term:
+            return
+        with self.Session() as s:
+            if not any(t.lower() == term.lower() for t in s.scalars(select(ConfirmedSkill.term))):
+                s.add(ConfirmedSkill(term=term))
+                s.commit()
+
+    def unconfirm_skill(self, term: str) -> None:
+        with self.Session() as s:
+            for row in s.scalars(select(ConfirmedSkill)):
+                if row.term.lower() == (term or "").strip().lower():
+                    s.delete(row)
+            s.commit()
 
     def setting(self, key: str, default: str = "") -> str:
         with self.Session() as s:

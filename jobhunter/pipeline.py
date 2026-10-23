@@ -12,6 +12,7 @@ from pathlib import Path
 from loguru import logger
 
 from jobhunter.config import Profile
+from jobhunter.liveness import closed_phrase
 from jobhunter.scoring import rank_jobs
 from jobhunter.sources import AdzunaSource, RemotiveSource, dedupe
 from jobhunter.sources.hackernews import HackerNewsSource
@@ -87,10 +88,35 @@ def store(tracker: Tracker, gathered: Gathered) -> RunSummary:
     # An offline run didn't really check the sites, so it must not close anything.
     if not gathered.offline:
         summary.closed = tracker.close_stale(CLOSE_AFTER_DAYS)
+    # Still listed, but the posting itself says the role is filled.
+    summary.closed += tracker.close_jobs([j.dedupe_key for j in gathered.jobs if closed_phrase(j.description or "")])
     tracker.finish_run(run, fetched=summary.fetched, new=len(summary.new), seen_again=summary.seen_again,
                        closed=summary.closed, problems="\n".join(summary.problems) or None)
     logger.info(f"Run {run.id}: {summary.line()}")
     return summary
+
+
+PAGE_CHECK_SOURCES = ("hackernews", "remotive", "adzuna")
+
+
+def check_shortlist(tracker: Tracker, delay: float = 1.0) -> list[tuple[Job, str, str]]:
+    """Check the pages of your shortlisted jobs from sources that never say when a job is taken
+    down; close the ones that are gone. Returns (job, verdict, why) for each job checked."""
+    import time
+
+    import httpx
+
+    from jobhunter.liveness import check_page
+    from jobhunter.sources.base import USER_AGENT
+
+    out = []
+    with httpx.Client(timeout=15, headers={"User-Agent": USER_AGENT}) as client:
+        for job in tracker.open_shortlist(PAGE_CHECK_SOURCES):
+            verdict, why = check_page(client, job.job_url or "")
+            out.append((job, verdict, why))
+            time.sleep(delay)
+    tracker.close_jobs(job_ids=[j.id for j, verdict, _ in out if verdict == "closed"])
+    return out
 
 
 def run_search(profile: Profile, tracker: Tracker) -> RunSummary:
@@ -125,10 +151,12 @@ def make_resume(profile: Profile, tracker: Tracker, job_id: int, jd_text: str = 
     base = parse_resume(profile.base_resume)
     if not base:
         raise RuntimeError(f"Could not read your base resume at {profile.base_resume}")
-    tailor = ResumeComposer(base, llm or LLMClient(), profile.must_keep, profile.linkedin_url, profile.output_dir)
+    tailor = ResumeComposer(base, llm or LLMClient(), profile.must_keep, profile.linkedin_url, profile.output_dir,
+                            confirmed=tracker.confirmed_skills())
     path = tailor.tailor(f"{job.title} - {job.company}\n{job.location}\n\n{jd_text or job.description or ''}",
                          job.company, job.title, feedback=job.kit_feedback or "") or ""
     if path:
+        tailor.warnings += quality_notes(path)
         tracker.set_kit(job_id, resume_path=path, notes="\n".join(tailor.warnings))
     return path, tailor.warnings
 
@@ -159,6 +187,7 @@ def save_edited_resume(profile: Profile, tracker: Tracker, job_id: int, text: st
                          linkedin_url=profile.linkedin_url)
     if path:
         Path(path).with_suffix(".txt").write_text(text, encoding="utf-8")
+        notes += quality_notes(path)
         tracker.set_kit(job_id, resume_path=path, notes="\n".join(notes))
     return path, notes
 
@@ -207,6 +236,17 @@ def make_outreach(profile: Profile, tracker: Tracker, job_id: int, llm=None) -> 
     return drafts
 
 
+def quality_notes(resume_path: str) -> list[str]:
+    """How the finished PDF reads back and how its bullets are written (none if no text was saved)."""
+    from jobhunter.resume import readback, writing
+
+    txt = Path(resume_path).with_suffix(".txt") if resume_path else None
+    if not txt or not txt.exists():
+        return []
+    text = txt.read_text(encoding="utf-8")
+    return [readback.summary(resume_path, text), writing.summary(text)]
+
+
 def resume_text_for(job) -> str:
     """The text of a job's tailored resume (saved next to its PDF), or '' for older resumes."""
     if not job or not job.kit_resume_path:
@@ -251,8 +291,10 @@ def prepare_kit(profile: Profile, tracker: Tracker, job_id: int, jd_text: str = 
     llm = llm or LLMClient()
     description = jd_text or job.description or ""
     posting = f"{job.title} - {job.company}\n{job.location}\n\n{description}"
-    tailor = ResumeComposer(base, llm, profile.must_keep, profile.linkedin_url, profile.output_dir)
+    tailor = ResumeComposer(base, llm, profile.must_keep, profile.linkedin_url, profile.output_dir,
+                            confirmed=tracker.confirmed_skills())
     resume_path = tailor.tailor(posting, job.company, job.title) or ""
+    tailor.warnings += quality_notes(resume_path)
 
     cover_path = ""
     try:

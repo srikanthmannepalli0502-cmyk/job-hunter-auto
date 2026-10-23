@@ -510,6 +510,73 @@ def board_from_url(url: str) -> tuple[str, str] | None:
     return None
 
 
+# A public list of employer job boards: data/companies.json of
+# github.com/zshah101/Automated-List-Of-Summer-2027-and-Fall-2026-Tech-Internships (MIT), built from
+# the apply links in public job lists. Entries are {"name", "ats", "slug"}, plus "wd" and "site" for
+# Workday and "host" and "site" for Oracle.
+REGISTRY_URL = ("https://raw.githubusercontent.com/zshah101/Automated-List-Of-Summer-2027-and-Fall-2026-"
+                "Tech-Internships/main/data/companies.json")
+
+
+def registry_board(entry: dict) -> tuple[str, str] | None:
+    """(ats, slug) as company_boards.csv writes it, for a registry entry on a system we read."""
+    ats, slug = entry.get("ats"), str(entry.get("slug") or "").strip()
+    if not slug:
+        return None
+    if ats in ("greenhouse", "lever", "ashby", "smartrecruiters"):
+        return ats, slug
+    if ats == "workday" and entry.get("wd") and entry.get("site") and not entry.get("host"):
+        return board_from_url(f"https://{slug}.{entry['wd']}.myworkdayjobs.com/{entry['site']}")
+    if ats == "oracle" and entry.get("host") and entry.get("site"):
+        return board_from_url(f"https://{entry['host']}/hcmUI/CandidateExperience/en/sites/{entry['site']}")
+    return None  # Workday's myworkdaysite.com hosts, Workable, Rippling...: not read
+
+
+# Words a sponsor's legal name may add to a registry's company name and still be that company:
+# "Novartis" -> NOVARTIS PHARMACEUTICALS, "Visa" -> VISA TECHNOLOGY AND OPERATIONS. Anything else
+# names a different company: "Circle" is not CIRCLE K STORES, "Cohere" is not COHERE HEALTH.
+_LEGAL_EXTRA = _GENERIC_TAIL | {
+    "OPERATIONS", "PHARMACEUTICAL", "PHARMACEUTICALS", "INDUSTRIES", "COMPANIES", "COMPANY", "BANK",
+    "FOUNDATION", "INCORPORATED", "RESEARCH", "LIFE", "INSURANCE", "MEDIA", "SEMICONDUCTOR", "NORTH",
+    "LABORATORIES", "AI", "RESOURCES", "PARTNERS", "ENTERTAINMENT", "FEDERAL", "SAVINGS", "TRUST", "OF",
+    "NATIONAL", "ASSOCIATION", "OPCO", "WORLDWIDE",
+}
+
+
+def _same_registry_company(name: str, match) -> bool:
+    if match.exact:
+        return True
+    reg, key = normalize_name(name).split(), normalize_name(match.sponsor.key).split()
+    return bool(reg) and key[: len(reg)] == reg and all(w in _LEGAL_EXTRA for w in key[len(reg):])
+
+
+def registry_candidates(entries: list[dict], db, roles: list[str], min_filings: int,
+                        have_keys: set[str], have_boards: set[tuple[str, str]]) -> list[list[tuple]]:
+    """Registry boards of H-1B sponsors you don't read yet: one list of (ats, slug) per sponsor,
+    with the sponsor first, sponsors with the most filings in your roles first."""
+    by_sponsor: dict[str, list] = {}
+    for e in entries:
+        found = registry_board(e)
+        if not found or found in have_boards:
+            continue
+        m = db.match(str(e.get("name", "")))
+        if not m or m.sponsor.key in have_keys or m.sponsor.filings_in(roles) < min_filings \
+                or not _same_registry_company(str(e.get("name", "")), m):
+            continue
+        group = by_sponsor.setdefault(m.sponsor.key, [m.sponsor])
+        if found not in group:
+            group.append(found)
+    return sorted(by_sponsor.values(), key=lambda g: g[0].filings_in(roles), reverse=True)
+
+
+def verify_registry_board(client: httpx.Client, ats: str, slug: str, employer_key: str) -> str | None:
+    """verify_board, and for Ashby and SmartRecruiters (whose APIs return no company name) the board
+    name must name the employer, since the registry's company name matched a sponsor only by name."""
+    if ats in ("ashby", "smartrecruiters") and not _url_names(slug, employer_key):
+        return None
+    return verify_board(client, ats, slug, employer_key)
+
+
 def verify_board(client: httpx.Client, ats: str, slug: str, employer_key: str) -> str | None:
     """The board's name if it really is a live board of this employer, else None."""
     try:

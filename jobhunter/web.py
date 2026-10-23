@@ -181,6 +181,7 @@ class App:
             sponsor = (f'<span class="ok" title="{_e(j.sponsor_note)}">{j.sponsor_score:.0f}</span>' if j.sponsor_score
                        else '<span class="bad" title="no H-1B filings found">none</span>')
             warn = f' <span class="warn" title="{_e(j.sponsorship_warning)}">&#9888; may not sponsor</span>' if j.sponsorship_warning else ""
+            warn += self.repost_tag(j)
             kind = f'<span class="tag">{_e(j.job_type.replace("_", "-"))}</span>' if j.job_type and j.job_type != "full_time" else ""
             actions = self.decision_buttons(j, view)
             if j.decision == "shortlisted" and view in ("todo", "shortlisted"):
@@ -221,6 +222,7 @@ class App:
         if j.kit_resume_path and j.kit_notes:
             files += ("<div class='muted' style='margin-top:6px'>Resume check:<ul>"
                       + "".join(f"<li>{_e(n)}</li>" for n in j.kit_notes.splitlines() if n.strip()) + "</ul></div>")
+            files += self.skill_buttons(j)
         if j.kit_resume_path and not busy:
             asked = "".join(f"<li>{_e(r)}</li>" for r in (j.kit_feedback or "").splitlines() if r.strip())
             files += (
@@ -240,6 +242,10 @@ class App:
             files += f"<div class='bad'>{_e(state)}</div>"
         warn = (f"<p class='warn'>&#9888; This posting may not sponsor visas: <i>{_e(j.sponsorship_warning)}</i></p>"
                 if j.sponsorship_warning else "")
+        if j.reposts:
+            warn += (f"<p class='muted'>Reposted {j.reposts}&times;: it came back after being taken down, or was "
+                     "posted again with a newer date. Often a role that's hard to fill, or an old opening kept "
+                     "alive; a referral or a note to the recruiter helps more than usual here.</p>")
         if apps:
             a = apps[0]
             applied = f"<p class='ok'>Applied {a.applied_date:%Y-%m-%d} &middot; status: <b>{_e(a.status)}</b></p>"
@@ -294,7 +300,24 @@ class App:
                 "<p class='muted'>A referral or a short note to the right person gets far more replies than an "
                 "application alone. You send these yourself; edit them first.</p>"
                 + (f"<p><b>Company fact for your note</b> (from your H-1B data): {_e(fact)}</p>" if fact else "")
+                + self.known_people(j.company)
                 + f"<div class='row'>{self.people_links(j.company, j.title)}</div>{button}{blocks}</div>")
+
+    def known_people(self, company: str) -> str:
+        """Your LinkedIn connections at this company (from the Connections.csv you uploaded)."""
+        people = self.tracker.connections_at(company)
+        if not people:
+            return ""
+        def person(c) -> str:
+            name = (f"<a href='{_e(c.url)}' target='_blank' rel='noopener'>{_e(c.name)}</a>"
+                    if (c.url or "").startswith("https://") else _e(c.name))
+            return f"<li>{name}{' &middot; ' + _e(c.position) if c.position else ''}</li>"
+
+        items = "".join(person(c) for c in people[:15])
+        more = f"<p class='muted'>and {len(people) - 15} more</p>" if len(people) > 15 else ""
+        return (f"<div><b>You know {len(people)} {'person' if len(people) == 1 else 'people'} here</b> "
+                f"<span class='muted'>(your LinkedIn connections): ask one of them for a referral first.</span>"
+                f"<ul>{items}</ul>{more}</div>")
 
     def edit_page(self, job_id: int, flash: str = "", user: str = "") -> str:
         from jobhunter.pipeline import resume_text_for
@@ -317,8 +340,42 @@ class App:
                     f"<a href='/job/{j.id}'>Cancel</a></p></form></div>")
         return self.page("Edit resume", body, "", flash, user)
 
+    def stages_page(self, app_id: int, flash: str = "", user: str = "") -> str:
+        """An application's interview steps, and a form to add the next one."""
+        from jobhunter.tracker import STAGE_KINDS, STAGE_OUTCOMES
+
+        found = self.tracker.get_application(app_id)
+        if found is None:
+            return self.page("Not found", "<p>No such application.</p>", user=user)
+        a, j = found
+        rows = []
+        for st in self.tracker.stages(app_id):
+            when = f"{st.happened:%Y-%m-%d}" if st.happened else "<span class='muted'>no date</span>"
+            outs = "".join(f"<option {'selected' if o == st.outcome else ''}>{o}</option>" for o in STAGE_OUTCOMES)
+            notes = "<br>".join(_e(n) for n in (st.notes or "").splitlines())
+            rows.append(f"<tr><td>{when}</td><td>{_e(st.kind)}</td><td>{_e(st.format or '')}</td>"
+                        f"<td>{_e(st.interviewers or '')}</td><td><form class='inline' method='post' "
+                        f"action='/stage-outcome/{st.id}'><select name='outcome'>{outs}</select> <button>Save</button>"
+                        f"</form></td><td>{notes}</td></tr>")
+        table = ("<div class='tablewrap'><table><tr><th>Date</th><th>Stage</th><th>Format</th><th>With</th>"
+                 "<th>Outcome</th><th>Notes</th></tr>" + "".join(rows) + "</table></div>") if rows else \
+            "<p class='muted'>No interview steps yet.</p>"
+        kinds = "".join(f"<option>{k}</option>" for k in STAGE_KINDS)
+        form = (f"<form method='post' action='/stages/{a.id}' class='row' style='flex-wrap:wrap;gap:6px'>"
+                f"<select name='kind'>{kinds}</select><input type='date' name='happened'>"
+                "<input name='format' placeholder='phone, video, onsite...'>"
+                "<input name='interviewers' placeholder='who (names, roles)'>"
+                "<textarea name='notes' rows='3' style='width:100%' placeholder='questions they asked, what to "
+                "prepare for the next round'></textarea><button class='primary'>Add step</button></form>")
+        body = (f"<div class='card'><h2 style='margin:0'>{_e(j.title)} at {_e(j.company)}</h2>"
+                f"<p class='muted'>Applied {a.applied_date:%Y-%m-%d} &middot; status <b>{_e(a.status)}</b> &middot; "
+                f"<a href='/job/{j.id}'>job page</a> &middot; <a href='/applications'>all applications</a></p>"
+                f"{table}<h3>Add the next step</h3>{form}</div>")
+        return self.page("Interview steps", body, "apps", flash, user)
+
     def applications_page(self, flash: str = "", user: str = "") -> str:
         rows = []
+        steps = self.tracker.stage_counts()
         for a, j in self.tracker.applications():
             opts = "".join(f"<option {'selected' if s == a.status else ''}>{s}</option>" for s in STATUSES)
             resume = f"<a href='/file?path={quote(a.resume_path)}' target='_blank'>resume</a>" if a.resume_path else "<span class='muted'>no resume recorded</span>"
@@ -326,8 +383,9 @@ class App:
             rows.append(
                 f"<tr><td>{a.applied_date:%Y-%m-%d}</td><td><a href='/job/{j.id}'>{_e(j.title)}</a></td><td>{_e(j.company)}</td>"
                 f"<td>{resume}{cover}</td><td><form class='inline' method='post' action='/status/{a.id}'>"
-                f"<select name='status'>{opts}</select> <button>Save</button></form></td></tr>")
-        body = ("<div class='tablewrap'><table><tr><th>Applied</th><th>Job</th><th>Company</th><th>What you sent</th><th>Status</th></tr>"
+                f"<select name='status'>{opts}</select> <button>Save</button></form></td>"
+                f"<td><a href='/stages/{a.id}'>{steps.get(a.id, 0) or 'add'}{' steps' if steps.get(a.id) else ''}</a></td></tr>")
+        body = ("<div class='tablewrap'><table><tr><th>Applied</th><th>Job</th><th>Company</th><th>What you sent</th><th>Status</th><th>Interviews</th></tr>"
                 + "".join(rows) + "</table></div>") if rows else "<p class='muted'>No applications yet.</p>"
         return self.page("Applications", self.follow_ups() + body, "apps", flash, user)
 
@@ -352,7 +410,59 @@ class App:
             out += ("<div class='card'><h3 style='margin-top:0'>Follow up</h3><p class='muted'>No reply after a week: "
                     "a short note to the recruiter, or a referral from someone at the company, often gets a "
                     "stalled application looked at.</p><ul>" + "".join(due[:20]) + "</ul></div>")
+        return out + self.calibration_card(apps)
+
+    def skill_buttons(self, j) -> str:
+        """'I have this' for the job's terms your master resume doesn't name, and your confirmed ones.
+        A confirmed skill may then appear on the SKILLS line of your resumes (never in a bullet)."""
+        m = re.search(r"not in your record \(don't claim\): ([^;\n]+)", j.kit_notes or "")
+        gaps = [g.strip() for g in m.group(1).split(",") if g.strip()] if m else []
+        confirmed = self.tracker.confirmed_skills()
+        have = {c.lower() for c in confirmed}
+
+        def button(action: str, term: str, label: str) -> str:
+            return (f"<form method='post' action='/skills/{action}/{j.id}' style='display:inline'>"
+                    f"<input type='hidden' name='term' value='{_e(term)}'><button class='btn'>{label}</button></form> ")
+
+        out = ""
+        todo = [g for g in gaps if g.lower() not in have]
+        if todo:
+            out += ("<div style='margin-top:8px'><b>Do you have any of these?</b> <span class='muted'>Only if "
+                    "it's true: a confirmed skill can go on the SKILLS line of your resumes, and you should "
+                    "be ready to talk about it.</span><div>"
+                    + "".join(button("confirm", g, f"I have {_e(g)}") for g in todo) + "</div></div>")
+        relevant = [c for c in confirmed if any(c.lower() == g.lower() for g in gaps) or c.lower() in
+                    (j.description or "").lower()]
+        if relevant:
+            out += ("<div class='muted' style='margin-top:6px'>Skills you confirmed for this job (interview prep): "
+                    + "".join(f"{_e(c)} {button('unconfirm', c, 'remove')}" for c in relevant) + "</div>")
         return out
+
+    @staticmethod
+    def repost_tag(j) -> str:
+        return (f' <span class="tag" title="came back after being taken down, or posted again with a newer date">'
+                f'reposted {j.reposts}&times;</span>' if getattr(j, "reposts", 0) else "")
+
+    @staticmethod
+    def calibration_card(apps: list) -> str:
+        """Interview and offer rates by score band: do higher scores get more interviews?"""
+        from jobhunter.calibration import MIN_APPLICATIONS, WAITING_DAYS, table_rows
+
+        if not apps:
+            return ""
+        rows = []
+        for name, bands in table_rows(apps):
+            for b in bands:
+                if b.results or b.waiting:
+                    rows.append(f"<tr><td>{_e(name)}</td><td>{_e(b.label)}</td><td class='num'>{b.results}</td>"
+                                f"<td class='num'>{b.rate(b.interviews)}</td><td class='num'>{b.rate(b.offers)}</td>"
+                                f"<td class='num'>{b.waiting}</td></tr>")
+        return ("<div class='card'><h3 style='margin-top:0'>Do your scores predict results?</h3>"
+                f"<p class='muted'>Interview and offer rates by score band. Applications sent in the last "
+                f"{WAITING_DAYS} days with no reply are still waiting and left out; a band needs "
+                f"{MIN_APPLICATIONS} results before it shows a rate.</p><div class='tablewrap'><table>"
+                "<tr><th>Score</th><th>Band</th><th>Results</th><th>Interview rate</th><th>Offer rate</th>"
+                "<th>Waiting</th></tr>" + "".join(rows) + "</table></div></div>")
 
     @staticmethod
     def people_links(company: str, title: str) -> str:
@@ -435,8 +545,21 @@ class App:
                "<p class='muted'>Paste the app address and this key into the extension's settings. Regenerate it if you "
                "think someone else has seen it (the old key stops working).</p>"
                "<form method='post' action='/extension/regenerate'><button>Regenerate key</button></form></div>")
+        n = self.tracker.connection_count()
+        conns = ("<div class='card'><h3 style='margin-top:0'>LinkedIn connections</h3>"
+                 f"<p>{n:,} connections saved. " if n else "<div class='card'><h3 style='margin-top:0'>LinkedIn connections</h3><p>")
+        conns += ("Job pages show who you know at each company. Download your data from LinkedIn (Settings &gt; "
+                  "Data privacy &gt; Get a copy of your data &gt; Connections) and choose its Connections.csv; "
+                  "a new file replaces the old list. Job Hunter never signs in to LinkedIn.</p>"
+                  "<form method='post' action='/connections/upload' id='connform'>"
+                  "<input type='file' accept='.csv' id='connfile'><textarea name='csv' id='conncsv' hidden></textarea>"
+                  "<button>Upload</button></form>"
+                  "<script>document.getElementById('connform').addEventListener('submit', async (e) => {"
+                  "const f = document.getElementById('connfile').files[0]; if (!f) { e.preventDefault(); return; }"
+                  "e.preventDefault(); document.getElementById('conncsv').value = await f.text(); e.target.submit(); });"
+                  "</script></div>")
         body = (f"<div class='card'><h3 style='margin-top:0'>Profile</h3>{basics}</div>"
-                f"<div class='card'><h3 style='margin-top:0'>Saved answers</h3>{free_html}{add}</div>{ext}")
+                f"<div class='card'><h3 style='margin-top:0'>Saved answers</h3>{free_html}{add}</div>{conns}{ext}")
         return self.page("Profile & answers", body, "answers", flash, user)
 
     def match_job(self, url: str, title: str = "") -> Job | None:
@@ -609,6 +732,8 @@ def make_handler(app: App, port: int):
                 return self.send_html(app.job_page(int(parts[1]), msg, user))
             if parts[0] == "edit" and len(parts) == 2 and parts[1].isdigit():
                 return self.send_html(app.edit_page(int(parts[1]), msg, user))
+            if parts[0] == "stages" and len(parts) == 2 and parts[1].isdigit():
+                return self.send_html(app.stages_page(int(parts[1]), msg, user))
             if url.path == "/applications":
                 return self.send_html(app.applications_page(msg, user))
             if url.path == "/runs":
@@ -650,6 +775,14 @@ def make_handler(app: App, port: int):
                 except ValueError as e:
                     return self.redirect("/answers?msg=" + quote(str(e)))
                 return self.redirect("/answers?msg=" + quote("Answer saved."))
+            if path == "/connections/upload":
+                from jobhunter.connections import parse_connections_csv
+
+                try:
+                    n = app.tracker.replace_connections(parse_connections_csv(form.get("csv", "")))
+                except ValueError as e:
+                    return self.redirect("/answers?msg=" + quote(str(e)))
+                return self.redirect("/answers?msg=" + quote(f"Saved {n:,} connections."))
             if path == "/extension/regenerate":
                 app.extension_key(regenerate=True)
                 return self.redirect("/answers?key=1&msg=" + quote("New key created; update it in the extension."))
@@ -671,6 +804,15 @@ def make_handler(app: App, port: int):
                 if not path_saved:
                     return self.redirect(f"/edit/{parts[1]}?msg=" + quote(" ".join(notes)))
                 return self.redirect(f"/job/{parts[1]}?msg=" + quote("Saved your edit and rebuilt the PDF."))
+            if len(parts) == 3 and parts[0] == "skills" and parts[1] in ("confirm", "unconfirm") and parts[2].isdigit():
+                term = form.get("term", "")
+                if parts[1] == "confirm":
+                    app.tracker.confirm_skill(term)
+                    msg = f"Confirmed {term}. Rebuild the resume (Change something?) to use it."
+                else:
+                    app.tracker.unconfirm_skill(term)
+                    msg = f"Removed {term}."
+                return self.redirect(f"/job/{parts[2]}?msg=" + quote(msg))
             if len(parts) == 3 and parts[:2] == ["answers", "delete"] and parts[2].isdigit():
                 app.tracker.delete_answer(int(parts[2]))
                 return self.redirect("/answers?msg=" + quote("Answer deleted."))
@@ -695,6 +837,15 @@ def make_handler(app: App, port: int):
                 if action == "status":
                     app.tracker.update_status(item, form.get("status", "applied"))
                     return self.redirect("/applications?msg=" + quote("Status saved."))
+                if action == "stages":
+                    day = form.get("happened", "").strip()
+                    happened = datetime.strptime(day, "%Y-%m-%d").replace(tzinfo=timezone.utc) if day else None
+                    app.tracker.add_stage(item, form.get("kind", "other"), happened, form.get("format", ""),
+                                          form.get("interviewers", ""), notes=form.get("notes", ""))
+                    return self.redirect(f"/stages/{item}?msg=" + quote("Step added."))
+                if action == "stage-outcome":
+                    stage = app.tracker.set_stage_outcome(item, form.get("outcome", "pending"))
+                    return self.redirect(f"/stages/{stage.application_id}?msg=" + quote("Outcome saved."))
             except ValueError as e:
                 return self.send_html(app.page("Error", f"<p class='bad'>{_e(e)}</p>"), 400)
             self.send_html("Not found", 404)
@@ -820,6 +971,9 @@ def make_handler(app: App, port: int):
                 with closing(sqlite3.connect(upload)) as s, closing(sqlite3.connect(dest)) as d:
                     s.backup(d)
             app.tracker.engine.dispose()
+            from jobhunter.tracker import Base
+
+            Base.metadata.create_all(app.tracker.engine)  # tables added after the backup was made
             app.tracker._add_missing_columns()
             with app.tracker.Session() as s:
                 self.send_json({"restored_jobs": s.query(Job).count()})

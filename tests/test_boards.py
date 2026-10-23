@@ -248,3 +248,63 @@ def test_suggested_board_is_kept_only_if_it_answers():
     client = routed_client({"greenhouse.io/v1/boards/acme": (200, {"name": "Acme Inc"}),
                             "greenhouse.io/v1/boards/wrongco": (200, {"name": "Wrong Co"})})
     assert suggest_board(LLM(), client, "Acme Inc", "ACME") == ("greenhouse", "acme", "Acme Inc")
+
+
+def _sponsor(key, filings):
+    from jobhunter.sponsors import Sponsor
+
+    return Sponsor(key=key, employer=key.title(), filings_all=filings, role_filings={"analyst": filings},
+                   active_months=12, months_covered=12, new_hires_latest_fy=1, new_hire_share=0.1,
+                   median_wage_data=None, uscis_new_approved=0, uscis_new_denied=0, possibly_cap_exempt=False)
+
+
+def test_registry_entries_become_our_board_format():
+    from jobhunter.sources.boards import registry_board
+
+    assert registry_board({"name": "Acme", "ats": "greenhouse", "slug": "acme"}) == ("greenhouse", "acme")
+    assert registry_board({"name": "Adobe", "ats": "workday", "slug": "adobe", "wd": "wd5",
+                           "site": "external_experienced"}) == (
+        "workday", "https://adobe.wd5.myworkdayjobs.com/external_experienced")
+    assert registry_board({"name": "Ford", "ats": "oracle", "slug": "efds.fa.em5.oraclecloud.com",
+                           "host": "efds.fa.em5.oraclecloud.com", "site": "CX_1"}) == (
+        "oracle", "https://efds.fa.em5.oraclecloud.com/hcmUI/CandidateExperience/en/sites/CX_1")
+    # Workday on myworkdaysite.com, and systems we don't read, are left out.
+    assert registry_board({"name": "Caris", "ats": "workday", "slug": "caris", "wd": "wd12", "site": "CLS",
+                           "host": "wd12.myworkdaysite.com"}) is None
+    assert registry_board({"name": "X", "ats": "workable", "slug": "x"}) is None
+
+
+def test_registry_candidates_are_new_sponsors_with_enough_filings():
+    from jobhunter.sources.boards import registry_candidates
+    from jobhunter.sponsors import SponsorDB
+
+    db = SponsorDB([_sponsor("ACME", 40), _sponsor("TINY", 2), _sponsor("HAVE", 90), _sponsor("BIG", 300)])
+    entries = [{"name": "Acme Inc.", "ats": "greenhouse", "slug": "acme"},
+               {"name": "Acme", "ats": "lever", "slug": "acme"},
+               {"name": "Tiny LLC", "ats": "ashby", "slug": "tiny"},
+               {"name": "Have Co", "ats": "greenhouse", "slug": "have2"},
+               {"name": "Big", "ats": "greenhouse", "slug": "big"},
+               {"name": "Nobody Corp", "ats": "greenhouse", "slug": "nobody"}]
+    groups = registry_candidates(entries, db, ["analyst"], 5, {"HAVE"}, {("greenhouse", "big")})
+    assert [(g[0].key, g[1:]) for g in groups] == [("ACME", [("greenhouse", "acme"), ("lever", "acme")])]
+
+
+def test_registry_board_without_company_name_must_name_the_employer():
+    from jobhunter.sources.boards import verify_registry_board
+
+    client = routed_client({"ashbyhq.com/posting-api/job-board/": (200, {"jobs": []})})
+    assert verify_registry_board(client, "ashby", "acme", "ACME") == "acme"
+    assert verify_registry_board(client, "ashby", "zzwidgets", "ACME") is None
+
+
+def test_registry_name_must_be_the_sponsor_not_a_longer_different_company():
+    from jobhunter.sources.boards import registry_candidates
+    from jobhunter.sponsors import SponsorDB
+
+    db = SponsorDB([_sponsor("NOVARTIS PHARMACEUTICALS", 50), _sponsor("CIRCLE K STORES", 50),
+                    _sponsor("COHERE HEALTH", 50)])
+    entries = [{"name": "Novartis", "ats": "greenhouse", "slug": "novartis"},
+               {"name": "Circle", "ats": "greenhouse", "slug": "circle"},
+               {"name": "Cohere", "ats": "ashby", "slug": "cohere"}]
+    groups = registry_candidates(entries, db, ["analyst"], 5, set(), set())
+    assert [g[0].key for g in groups] == ["NOVARTIS PHARMACEUTICALS"]

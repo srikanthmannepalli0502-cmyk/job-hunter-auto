@@ -46,3 +46,22 @@ def test_invalid_status_and_ids(tracker):
         tracker.update_status(app.id, "ghosted")
     with pytest.raises(ValueError):
         tracker.log_application(9999)
+
+
+def test_interview_stages(tracker):
+    from datetime import datetime, timezone
+
+    import pytest
+
+    tracker.save_new([make_job()])
+    job = tracker.top_jobs(1)[0]
+    app = tracker.log_application(job.id)
+    st = tracker.add_stage(app.id, "recruiter screen", datetime(2026, 10, 1, tzinfo=timezone.utc), "phone",
+                           "Pat (recruiter)", notes="Asked about visa timeline")
+    tracker.add_stage(app.id, "technical")
+    assert [s.kind for s in tracker.stages(app.id)] == ["recruiter screen", "technical"]  # dated first
+    assert tracker.get_application(app.id)[0].status == "interview"  # moved on from "applied"
+    assert tracker.stage_counts() == {app.id: 2}
+    assert tracker.set_stage_outcome(st.id, "passed").outcome == "passed"
+    with pytest.raises(ValueError):
+        tracker.add_stage(app.id, "coffee chat")

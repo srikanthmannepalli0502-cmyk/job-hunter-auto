@@ -9,9 +9,12 @@
     python -m jobhunter applied JOB_ID         log an application (records the kit you sent)
     python -m jobhunter status APP_ID STATUS   update an application (interview, offer, ...)
     python -m jobhunter applications           show your application history
+    python -m jobhunter calibrate              interview and offer rates by score band
+    python -m jobhunter check-open             close shortlisted HN/Remotive/Adzuna jobs that are gone
     python -m jobhunter runs                   show recent runs and any source problems
     python -m jobhunter sponsor "COMPANY"      look up a company's H-1B sponsorship
     python -m jobhunter discover-boards        find target sponsors' Greenhouse/Lever/Ashby boards
+    python -m jobhunter import-boards          add sponsors' boards from a public board registry
 """
 
 import argparse
@@ -24,9 +27,10 @@ from pathlib import Path
 from loguru import logger
 
 from jobhunter.config import DEFAULT_PROFILE_PATH, load_profile, settings
-from jobhunter.pipeline import gather, prepare_kit, push, run_search
+from jobhunter.pipeline import gather, prepare_kit, push, quality_notes, run_search
 from jobhunter.sources.base import USER_AGENT
-from jobhunter.sources.boards import find_board, suggest_board, write_boards
+from jobhunter.sources.boards import (REGISTRY_URL, find_board, registry_candidates, suggest_board,
+                                      verify_registry_board, write_boards)
 from jobhunter.sponsors import SponsorDB, describe, sponsor_score
 from jobhunter.tracker import STATUSES, Tracker
 
@@ -117,10 +121,12 @@ def cmd_tailor(args, profile, tracker) -> None:
     base_text = parse_resume(profile.base_resume)
     if not base_text:
         sys.exit(f"Could not read your base resume at {profile.base_resume}")
-    tailor = ResumeComposer(base_text, LLMClient(), profile.must_keep, profile.linkedin_url, profile.output_dir)
+    tailor = ResumeComposer(base_text, LLMClient(), profile.must_keep, profile.linkedin_url, profile.output_dir,
+                            confirmed=tracker.confirmed_skills())
     path = tailor.tailor(f"{job.title} - {job.company}\n{job.location}\n\n{description}", job.company, job.title)
     if not path:
         sys.exit("Could not produce a one-page resume. Try again or shorten your base resume.")
+    tailor.warnings += quality_notes(path)
     tracker.set_kit(job.id, resume_path=path, notes="\n".join(tailor.warnings))
     for w in tailor.warnings:
         print(f"CHECK: {w}")
@@ -160,6 +166,38 @@ def cmd_applications(args, profile, tracker) -> None:
         print(f"#{app.id:<4} {app.status:<10} {app.applied_date:%Y-%m-%d}  {job.title} @ {job.company}")
         if app.resume_path:
             print(f"      resume: {app.resume_path}")
+
+
+def cmd_check_open(args, profile, tracker) -> None:
+    """Check the pages of shortlisted jobs from Hacker News, Remotive and Adzuna; close the gone ones."""
+    from jobhunter.pipeline import check_shortlist
+
+    results = check_shortlist(tracker)
+    if not results:
+        print("No open shortlisted jobs from Hacker News, Remotive or Adzuna to check.")
+    for job, verdict, why in results:
+        print(f"#{job.id:<5} {verdict:<8} {job.title} @ {job.company}: {why}")
+    closed = sum(verdict == "closed" for _, verdict, _ in results)
+    if closed:
+        print(f"\nClosed {closed} job(s).")
+
+
+def cmd_calibrate(args, profile, tracker) -> None:
+    """Interview and offer rates by score band."""
+    from jobhunter.calibration import MIN_APPLICATIONS, WAITING_DAYS, table_rows
+
+    apps = tracker.applications()
+    if not apps:
+        print("No applications logged yet.")
+        return
+    print(f"Results by score band (sent under {WAITING_DAYS} days ago with no reply: waiting, left out; "
+          f"a rate needs {MIN_APPLICATIONS}+ results)\n")
+    print(f"{'Score':<14}{'Band':<10}{'Results':>8}{'Interview':>11}{'Offer':>8}{'Waiting':>9}")
+    for name, bands in table_rows(apps):
+        for b in bands:
+            if b.results or b.waiting:
+                print(f"{name:<14}{b.label:<10}{b.results:>8}{b.rate(b.interviews):>11}{b.rate(b.offers):>8}"
+                      f"{b.waiting:>9}")
 
 
 def cmd_runs(args, profile, tracker) -> None:
@@ -247,6 +285,62 @@ def cmd_discover_boards(args, profile, tracker) -> None:
           f"Review it: remove any row that points at a different company with a similar name.")
 
 
+def cmd_import_boards(args, profile, tracker) -> None:
+    """Add the boards of H-1B sponsors listed in a public board registry, each checked live first."""
+    import csv
+    import json
+    import time
+
+    import httpx
+
+    db = SponsorDB.load(profile.sponsorship.data_file)
+    if db is None:
+        sys.exit("No sponsor data; see README (H-1B sponsorship).")
+    src = args.registry
+    if src.startswith("https://"):
+        r = httpx.get(src, timeout=60, headers={"User-Agent": USER_AGENT}, follow_redirects=True)
+        r.raise_for_status()
+        entries = r.json()
+    else:
+        entries = json.loads(Path(src).read_text(encoding="utf-8"))
+    path = Path(profile.boards.file)
+    existing: list[dict] = []
+    if path.exists():
+        with path.open(encoding="utf-8", newline="") as f:
+            existing = list(csv.DictReader(f))
+    checked = set(Path(args.checked).read_text(encoding="utf-8").split("\n")) if args.checked and \
+        Path(args.checked).exists() else set()
+    groups = registry_candidates(entries, db, profile.sponsorship.roles, args.min_filings,
+                                 {r["employer_key"] for r in existing} | checked,
+                                 {(r["ats"], r["slug"]) for r in existing})[: args.top]
+    print(f"{len(entries):,} registry boards; checking {len(groups)} sponsors with {args.min_filings}+ "
+          f"H-1B filings in your roles that you don't read yet...")
+
+    rows, done = [], set()
+
+    def save():
+        write_boards(path, existing + rows)
+        if args.checked:
+            Path(args.checked).write_text("\n".join(sorted(checked | done - {""})) + "\n", encoding="utf-8")
+
+    with httpx.Client(timeout=15, headers={"User-Agent": USER_AGENT}) as client:
+        for i, (sponsor, *boards) in enumerate(groups, 1):
+            for ats, slug in boards:
+                name = verify_registry_board(client, ats, slug, sponsor.key)
+                time.sleep(args.delay)
+                if name:
+                    rows.append({"employer_key": sponsor.key, "employer": sponsor.employer, "ats": ats,
+                                 "slug": slug, "board_name": name})
+                    print(f"  [{i}/{len(groups)}] {sponsor.employer}: {ats}/{slug}")
+                    break
+            done.add(sponsor.key)
+            if i % 50 == 0:
+                save()
+    save()
+    print(f"\nAdded {len(rows)} boards ({len(existing) + len(rows)} in all) to {path}. Review it: remove any "
+          f"row that points at a different company with a similar name.")
+
+
 def build_parser() -> argparse.ArgumentParser:
     p = argparse.ArgumentParser(prog="jobhunter", description="Find, rank and apply to jobs.")
     p.add_argument("--profile", type=Path, default=DEFAULT_PROFILE_PATH, help="path to profile.toml")
@@ -307,6 +401,12 @@ def build_parser() -> argparse.ArgumentParser:
     s = sub.add_parser("applications", help="show your application history")
     s.set_defaults(func=cmd_applications)
 
+    s = sub.add_parser("calibrate", help="interview and offer rates by score band")
+    s.set_defaults(func=cmd_calibrate)
+
+    s = sub.add_parser("check-open", help="check shortlisted Hacker News/Remotive/Adzuna jobs are still open")
+    s.set_defaults(func=cmd_check_open)
+
     s = sub.add_parser("runs", help="show recent runs and source problems")
     s.add_argument("--top", type=int, default=10)
     s.set_defaults(func=cmd_runs)
@@ -320,6 +420,14 @@ def build_parser() -> argparse.ArgumentParser:
                    help="also ask the LLM for each sponsor's careers site (Workday, Oracle...); every "
                         "suggestion is checked against the live site before it's kept")
     s.set_defaults(func=cmd_discover_boards)
+
+    s = sub.add_parser("import-boards", help="add sponsors' boards from a public board registry, checked live")
+    s.add_argument("--registry", default=REGISTRY_URL, help="registry JSON file or https URL")
+    s.add_argument("--top", type=int, default=2000, help="how many sponsors to check")
+    s.add_argument("--min-filings", type=int, default=5, help="minimum H-1B filings in your roles")
+    s.add_argument("--checked", metavar="FILE", help="sponsors already checked (skipped, then updated)")
+    s.add_argument("--delay", type=float, default=0.2, help="seconds between checks")
+    s.set_defaults(func=cmd_import_boards)
 
     s = sub.add_parser("sponsor", help="look up a company's H-1B sponsorship")
     s.add_argument("company")
