@@ -11,12 +11,28 @@
     <label>App address<br><input id="appUrl" placeholder="https://your-app.azurewebsites.net" style="width:100%"></label>
     <label>Extension key<br><input id="key" type="password" style="width:100%"></label>
     <p class="muted">Find the key in your Job Hunter app: Profile &amp; answers &rarr; Show extension key.</p>
-    <label><input id="autoOpen" type="checkbox"> Open the application when a shortlisted job's resume is ready,
-      and fill it up to Review once its form opens (with the Job Hunter panel open)</label>
+    <label><input id="autoOpen" type="checkbox"> When a shortlisted job's resume is ready, open the application
+      and fill it up to Review by itself (one at a time; you get a notification at Review or when it needs you)</label>
     <button id="save" class="primary">Save and test</button>
     <p id="status"></p>
+
+    <h3>Job-site login</h3>
+    <p class="muted">One email and password for every Workday site. Job Hunter signs in with it, or creates the
+      account when the site has none. Use a password you use nowhere else; "Make one" creates a strong one.
+      It is encrypted and kept only in this browser, never sent to your Job Hunter app, and only typed into
+      Workday's own Sign In / Create Account forms.</p>
+    <label>Email<br><input id="loginEmail" type="email" style="width:100%"></label>
+    <label>Password<br><input id="loginPassword" type="password" autocomplete="new-password" style="width:100%"></label>
+    <label><input id="showPassword" type="checkbox"> Show</label>
+    <button id="makePassword">Make one</button>
+    <label><input id="consentOnCreate" type="checkbox"> When creating an account, tick the site's
+      "I agree to the terms / privacy" box (otherwise it stops there and asks you)</label>
+    <button id="saveLogin" class="primary">Save login</button>
+    <button id="removeLogin">Remove login</button>
+    <p id="loginStatus"></p>
   </main>
   <script src="api.js"></script>
+  <script src="vault.js"></script>
   <script src="options.js"></script>
 </body>
 </html>

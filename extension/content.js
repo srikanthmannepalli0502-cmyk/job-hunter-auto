@@ -1,12 +1,13 @@
 // Injected into an application page when you use the side panel. It reads the form's questions,
 // fills the empty ones you have answers for, attaches files, and collects what you typed so you
-// can save it. It never submits the form, and never touches fields that look sensitive.
+// can save it. It never submits the form, and never touches fields that look sensitive; the only
+// password it types is your saved job-site login, into a Workday Sign In / Create Account form (account()).
 // Besides plain inputs it handles Workday's widgets: button dropdowns, search-and-pick boxes,
 // Yes/No questions labelled by their field wrapper, and numbered Work Experience / Websites sections.
 // Which answer and option to use comes from matching.js (injected first). Every value is read back
 // after filling: one the page didn't keep is reported as skipped, not filled.
 (() => {
-  const VERSION = 12;
+  const VERSION = 13;
   if (window.__jobHunterApi && window.__jobHunterApi.version >= VERSION) return;
   const M = window.__jobHunterMatch;
   if (!M) throw new Error("Job Hunter: matching.js must be injected before content.js");
@@ -619,10 +620,103 @@
   const needsResume = () => !!document.querySelector('input[type="file"]') &&
     !document.querySelector('[data-automation-id="file-upload-item"]');
 
+  const byId = (id) => [...document.querySelectorAll(`[data-automation-id="${id}"]`)].find(visible);
+  const CLICKABLE = '[data-automation-id="click_filter"], button, a, [role=button]';
+  // The nearest control around `el` whose label matches, e.g. the Sign In button of this form
+  // (not the Sign In link in the page header).
+  function near(el, re) {
+    for (let box = el?.parentElement; box; box = box.parentElement) {
+      const hit = [...box.querySelectorAll(CLICKABLE)].filter(visible)
+        .find((b) => re.test(clean(b.getAttribute("aria-label") || b.innerText)));
+      if (hit) return hit;
+    }
+    return null;
+  }
+  // Workday lays a transparent click_filter over its buttons; that's what takes the click.
+  const pressButton = (b) => press(b.parentElement?.querySelector(':scope > [data-automation-id="click_filter"]') || b);
+
+  // Workday's Sign In / Create Account form: {email, password, verify (Create Account only)}.
+  function loginForm() {
+    const pw = [...document.querySelectorAll('input[type="password"]')].filter(visible);
+    const password = byId("password") || pw[0];
+    if (!password) return null;
+    const email = byId("email") || [...document.querySelectorAll('input[type="email"], input[type="text"]')]
+      .filter(visible).find((i) => /e-?mail/i.test(labelOf(i) + " " + (i.autocomplete || "")));
+    return { email, password, verify: byId("verifyPassword") || pw[1] || null };
+  }
+  // The posting's own Apply button (before the application starts; there is no progress bar yet).
+  const applyButton = () => (step() ? null : byId("adventureButton"));
+  const CAPTCHA = 'iframe[src*="recaptcha"], iframe[src*="hcaptcha"], iframe[src*="turnstile"], [data-automation-id*="captcha" i]';
+
   function status() {
     const s = step();
+    const login = loginForm();
+    const text = s || login ? "" : (document.body?.innerText || "").slice(0, 4000);
     return { workday: !!s, step: s, review: atReview(s), next: !!nextButton(), needsResume: needsResume(),
-             signIn: !!document.querySelector('input[type="password"]'), errors: pageErrors() };
+             signIn: !!login, account: login ? (login.verify ? "create" : "signin") : null,
+             posting: !!applyButton(), captcha: [...document.querySelectorAll(CAPTCHA)].some(visible),
+             verifyEmail: /verify your (email|account)|verification (email|link)|activate your account/i.test(text),
+             form: controls().length, errors: pageErrors() };
+  }
+
+  // On the posting: press Apply, then "Apply Manually" (Job Hunter fills the form itself, so
+  // Workday's own resume parsing isn't used). Nothing here is a submit button.
+  async function start() {
+    const apply = applyButton();
+    if (!apply || !/apply/i.test(clean(apply.innerText))) return { started: false, reason: "no Apply button" };
+    pressButton(apply);
+    for (let i = 0; i < 40; i++) {
+      await sleep(250);
+      const manual = byId("applyManually");
+      if (manual) {
+        pressButton(manual);
+        for (let k = 0; k < 40 && !step() && !loginForm(); k++) await sleep(250); // the next screen drawing
+        return { started: true };
+      }
+      if (step() || loginForm()) return { started: true };
+    }
+    return { started: false, reason: "nothing opened after Apply" };
+  }
+
+  // Sign in to (mode "signin") or create (mode "create") this Workday site's account with your
+  // saved job-site login, switching the form between the two if needed. `consent` ticks the
+  // Create Account form's terms box. Returns {done} once the form is gone, else the page's errors.
+  async function account({ email, password, mode, consent }) {
+    let f = loginForm();
+    if (!f) return { done: false, reason: "no sign-in form" };
+    const create = mode === "create";
+    if (!!f.verify !== create) {
+      const link = create ? byId("createAccountLink") || near(f.password, /^create account$/i)
+                          : byId("signInLink") || near(f.password, /^(already have an account\? )?sign in$/i);
+      if (!link) return { done: false, reason: `no ${create ? "Create Account" : "Sign In"} link` };
+      pressButton(link);
+      for (let i = 0; i < 40 && !!loginForm()?.verify !== create; i++) await sleep(250);
+      f = loginForm();
+      if (!f || !!f.verify !== create) return { done: false, reason: "the form didn't switch" };
+    }
+    if (!f.email) return { done: false, reason: "no email field" };
+    setValue(f.email, email);
+    setValue(f.password, password);
+    if (create) {
+      setValue(f.verify, password);
+      const box = byId("createAccountCheckbox") || [...document.querySelectorAll('input[type="checkbox"]')]
+        .filter(visible).find((c) => /agree|consent|terms|privacy|acknowledge/i.test(labelOf(c)));
+      if (box && !box.checked) {
+        if (!consent) return { done: false, reason: "the Create Account form asks you to agree to its terms" };
+        box.click();
+      }
+    }
+    const submit = create ? byId("createAccountSubmitButton") || near(f.password, /^create account$/i)
+                          : byId("signInSubmitButton") || near(f.password, /^sign in$/i);
+    if (!submit) return { done: false, reason: "no submit button on the form" };
+    pressButton(submit);
+    for (let i = 0; i < 80; i++) {
+      await sleep(250);
+      if (!loginForm()) return { done: true };
+      const errors = pageErrors();
+      if (errors.length && i > 4) return { done: false, errors };
+    }
+    return { done: false, reason: "the form stayed" };
   }
 
   // Press "Save and Continue" once and wait for the next step. Re-checks the button right before
@@ -647,6 +741,8 @@
   window.__jobHunterApi = {
     status: () => status(),
     next: () => next(),
+    start: () => start(),
+    account: (a) => account(a),
     version: VERSION,
     questions: () => ({ questions: questions(), title: document.title }),
     fill: (ctx) => fill(ctx),

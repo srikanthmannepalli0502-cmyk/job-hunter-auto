@@ -169,18 +169,29 @@ pip install -r requirements.txt
    the page shows an error; after you answer, *I've filled it, continue* goes on from there. Jobs
    waiting on you are listed under *Waiting on you* in the app.
 
-   With the extension installed, shortlisting is enough to start: once the tailored resume is
-   ready, the extension opens the application in a new tab (at most 3 at a time; turn it off in
-   the extension settings). You click the posting's *Apply* and sign in; when the application
-   form appears and the Job Hunter panel is open, *Fill to Review* starts by itself. Sign-in and
-   account pages are always left to you.
+   With the extension installed, shortlisting is all you do. Once the tailored resume is ready, the
+   extension opens the application in the front tab and does the rest with no side panel open:
+   it presses the posting's *Apply* and *Apply Manually*, signs in with your saved job-site login
+   (or creates the account when that Workday site has none), then runs *Fill to Review*. One
+   application at a time; the next opens once the last reaches Review or needs you. Greenhouse,
+   Lever and Ashby forms are filled and the resume attached, then it tells you. It stops and asks
+   you at a CAPTCHA, an email-verification step, or a login that doesn't work. Turn auto-opening
+   off in the extension settings. Keep Chrome open and not minimised: Chrome slows pages it can't show.
 
-Job Hunter never submits applications for you, and never fills passwords, SSN, passport, bank or
-date-of-birth fields. The only button it presses is Workday's page-footer next button
-(`data-automation-id` `pageFooterNextButton` or `bottom-navigation-next-button`), and only while it
-reads *Save and Continue*, *Next* or *Continue*; never on the Review step, and never a button whose
-label mentions submit, apply, send, finish or confirm. Greenhouse, Lever and Ashby forms are one
-page with only a *Submit* button, so there it just fills.
+   **Job-site login:** one email and password for every Workday site, entered in the extension
+   settings (*Make one* creates a strong password; use one you use nowhere else). It is encrypted
+   with a key Chrome generated and won't export, kept only in that browser, never sent to your
+   Job Hunter app, and only typed into Workday's own Sign In / Create Account forms in the page's
+   top frame. A setting decides whether it ticks the Create Account form's terms box for you.
+
+Job Hunter never submits applications for you, and never fills SSN, passport, bank or
+date-of-birth fields; the only password it types is your job-site login, as above. The buttons it
+presses are the posting's *Apply* / *Apply Manually* (before the application starts), Workday's
+*Sign In* / *Create Account*, and Workday's page-footer next button
+(`data-automation-id` `pageFooterNextButton` or `bottom-navigation-next-button`), only while it
+reads *Save and Continue*, *Next* or *Continue*; never on the Review step, and never a footer button
+whose label mentions submit, apply, send, finish or confirm. Greenhouse, Lever and Ashby forms are
+one page with only a *Submit* button, so there it just fills.
 
 ### Hosting
 
@@ -323,7 +334,7 @@ jobhunter/
     ├── readback.py     # read the PDF back like an ATS parser
     ├── writing.py      # bullet writing score
     └── cover.py        # cover note
-extension/              # Chrome side panel: fill, attach, save answers, ask
+extension/              # Chrome extension: side panel (fill, attach, save answers, ask) and the background Fill to Review
 scripts/                # run_scheduled.cmd + install_schedule.ps1 (Windows Task Scheduler)
 tests/                  # pytest suite (APIs mocked, LLM faked); runs in GitHub Actions
 ```

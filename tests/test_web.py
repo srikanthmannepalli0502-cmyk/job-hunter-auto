@@ -281,3 +281,8 @@ def test_shortlisting_opens_the_application_once_the_resume_is_ready(server, mon
     assert [j["id"] for j in ready] == [acme.id]
     httpx.post(f"{base}/api/x/opened/{acme.id}", json={}, headers=h)
     assert httpx.get(f"{base}/api/x/ready", headers=h).json()["jobs"] == []
+    # The autopilot asks for the job it opened by id, whatever page the sign-in moved to.
+    ctx = httpx.get(f"{base}/api/x/context", params={"job_id": acme.id, "url": "https://example.com/login"}, headers=h).json()
+    assert ctx["job"]["id"] == acme.id
+    ctx = httpx.get(f"{base}/api/x/context", params={"job_id": 99999, "url": "https://example.com/login"}, headers=h).json()
+    assert ctx["job"] is None

@@ -20,3 +20,13 @@ async function api(path, { method = "GET", body = null, raw = false } = {}) {
   if (!resp.ok) throw new Error(data.error || `HTTP ${resp.status}`);
   return data;
 }
+
+// The job's tailored resume (or cover note) as content.js's attach() takes it.
+async function fileArg(which, jobId) {
+  const resp = await api(`/api/x/${which}/${jobId}`, { raw: true });
+  const buf = new Uint8Array(await resp.arrayBuffer());
+  let bin = "";
+  for (let i = 0; i < buf.length; i += 0x8000) bin += String.fromCharCode(...buf.subarray(i, i + 0x8000));
+  return { base64: btoa(bin), filename: resp.headers.get("X-Filename") || `${which}.pdf`,
+           mime: resp.headers.get("Content-Type") || "application/pdf", which };
+}

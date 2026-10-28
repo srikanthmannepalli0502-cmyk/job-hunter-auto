@@ -894,7 +894,9 @@ def make_handler(app: App, port: int):
                     return self.send_json({"error": "bad JSON"}, 400)
             try:
                 if method == "GET" and parts == ["context"]:
-                    job = app.match_job(params.get("url", ""), params.get("title", ""))
+                    # The background autopilot knows which job it opened; the side panel matches the page.
+                    job_id = str(params.get("job_id", ""))
+                    job = (app.tracker.get_job(int(job_id)) if job_id.isdigit() else None) or                         app.match_job(params.get("url", ""), params.get("title", ""))
                     values = app.field_values()
                     saved = {a.field for a in app.tracker.answers() if a.field}
                     return self.send_json({

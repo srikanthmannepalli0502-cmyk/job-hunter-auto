@@ -24,8 +24,8 @@ function esc(s) {
 }
 
 async function refresh() {
-  if (autoRunning) return; // keep acting on the application being filled
   tab = await activeTab();
+  showRun();
   const { appUrl, key } = await settings();
   $("setup").hidden = !!(appUrl && key);
   if (!appUrl || !key) { $("jobInfo").textContent = "Not connected yet."; return; }
@@ -77,110 +77,40 @@ async function preview(which) {
   previewed.add(`${which}:${ctx.job.id}`);
 }
 
-async function attachFile(which, auto = false) {
-  if (!auto && !previewed.has(`${which}:${ctx.job.id}`)) {
+async function attachFile(which) {
+  if (!previewed.has(`${which}:${ctx.job.id}`)) {
     await preview(which);
     $("attachResult").innerHTML = `<span class="warn">Opened the ${which} in a new tab. Read it, then click Attach again to upload it.</span>`;
     return;
   }
-  const resp = await api(`/api/x/${which}/${ctx.job.id}`, { raw: true });
-  const buf = new Uint8Array(await resp.arrayBuffer());
-  let bin = "";
-  for (let i = 0; i < buf.length; i += 0x8000) bin += String.fromCharCode(...buf.subarray(i, i + 0x8000));
-  const filename = resp.headers.get("X-Filename") || `${which}.pdf`;
-  const mime = resp.headers.get("Content-Type") || "application/pdf";
-  const frames = await inPage("attach", { base64: btoa(bin), filename, mime, which });
+  const file = await fileArg(which, ctx.job.id);
+  const frames = await inPage("attach", file);
   const ok = frames.some((f) => f.attached);
   $("attachResult").innerHTML = ok
-    ? `<span class="ok">Attached ${esc(filename)}.</span> Check the page shows it.`
+    ? `<span class="ok">Attached ${esc(file.filename)}.</span> Check the page shows it.`
     : `<span class="warn">No ${which} upload field found on this page (some sites only show it after you click "Upload").</span>`;
   return ok;
 }
 
-// Fill to Review (Workday): fill the step, attach the resume where asked, press Save and Continue,
-// and repeat. Stops at Review, at a question that's yours, at any error the page shows, or after 8
-// steps, and tells you (a desktop notification and the app's "Waiting on you" list). After you
-// answer what it stopped on, "I've filled it, continue" goes on from that step.
-let stopAuto = false;
-let autoRunning = false; // the panel stays on the application's tab while this runs
-const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
-const workdayStatus = async () => (await inPage("status")).find((s) => s.workday);
-const SIGN_IN = /sign in|sign-in|create account|log ?in|register/i;
-$("stopAuto").addEventListener("click", () => { stopAuto = true; });
-$("auto").addEventListener("click", () => fillToReview(false));
-$("autoResult").addEventListener("click", (e) => { if (e.target.id === "continueAuto") fillToReview(true); });
-
-// A desktop notification (click it to come back to this tab) and the job's state in the app.
-async function tellYou(state, step, note) {
-  const job = ctx?.job;
-  const title = state === "review" ? "Ready for you to submit" : "Job Hunter needs you";
-  const where = job ? `${job.title} at ${job.company}` : tab.title || "this application";
-  try {
-    chrome.notifications.create(`jh-${tab.id}`, {
-      type: "basic", iconUrl: "icon128.png", title, requireInteraction: true, priority: 2,
-      message: state === "review" ? `${where} is at Review. Check it and submit.` : `${where}, ${step}: ${note}`.slice(0, 300),
-    });
-  } catch { /* notifications are a convenience */ }
-  if (job) {
-    try { await api(`/api/x/progress/${job.id}`, { method: "POST", body: { state, step, note, url: tab.url } }); } catch { /* app offline */ }
-  }
+// Fill to Review runs in the background (autopilot.js), so it carries on with this panel closed.
+// The panel starts and stops it and shows how far it got on this tab.
+$("auto").addEventListener("click", () => chrome.runtime.sendMessage({ autopilot: "run", tabId: tab.id, jobId: ctx?.job?.id || null }));
+$("stopAuto").addEventListener("click", () => chrome.runtime.sendMessage({ autopilot: "stop", tabId: tab.id }));
+$("autoResult").addEventListener("click", (e) => {
+  if (e.target.id === "continueAuto") chrome.runtime.sendMessage({ autopilot: "run", tabId: tab.id, trust: true });
+});
+const LINE = { ok: "ok", warn: "warn", needs: "warn", bad: "bad", muted: "muted" };
+async function showRun() {
+  if (!tab) return;
+  const run = ((await chrome.storage.session.get("runs")).runs || {})[tab.id];
+  const going = !!run && ["waiting", "running"].includes(run.state);
+  $("auto").disabled = going;
+  $("stopAuto").hidden = !going;
+  $("autoResult").innerHTML = !run ? "" : run.lines.map((l) =>
+    `<div>${l.kind === "step" ? `<b>${esc(l.text)}</b>` : `<span class="${LINE[l.kind] || ""}">${esc(l.text)}</span>`}</div>`).join("") +
+    (run.state === "needs_you" ? `<button id="continueAuto" class="primary">I've filled it, continue</button>` : "");
 }
-
-async function fillToReview(trustThisStep) {
-  if (!ctx || autoRunning) return;
-  stopAuto = false;
-  autoRunning = true;
-  $("auto").disabled = true;
-  $("stopAuto").hidden = false;
-  const lines = [];
-  const say = (html) => { lines.push(html); $("autoResult").innerHTML = lines.map((l) => `<div>${l}</div>`).join(""); };
-  const stopped = `<span class="warn">Stopped. Nothing past this step was touched.</span>`;
-  const again = `<button id="continueAuto" class="primary">I've filled it, continue</button>`;
-  const needsYou = async (step, items, note) => {
-    say(`<span class="warn">Stopped at ${esc(step)}. ${esc(note)}</span>` +
-        (items.length ? `<ul>${items.map((s) => `<li>${esc(s)}</li>`).join("")}</ul>` : "") + again);
-    await tellYou("needs_you", step, items.length ? items.slice(0, 3).join("; ") : note);
-  };
-  try {
-    for (let page = 0; ; page++) {
-      if (stopAuto) return say(stopped);
-      const st = await workdayStatus();
-      if (!st) return say(`<span class="muted">Fill to Review works on Workday applications. Here, use Fill this page and submit yourself.</span>`);
-      if (st.review) {
-        say(`<span class="ok"><b>Reached Review.</b></span> Check every answer and the resume; change anything you want, then submit yourself.`);
-        return await tellYou("review", st.step.name, "Check it and submit");
-      }
-      if (page >= 8) return await needsYou(st.step.name, [], "It went through 8 steps without reaching Review.");
-      if (SIGN_IN.test(st.step.name) || st.signIn) {
-        return await needsYou(st.step.name, [], "Sign in or create the account yourself; Job Hunter never does. Then continue.");
-      }
-      const step = `step ${st.step.n} of ${st.step.of} (${st.step.name})`;
-      say(`<b>Step ${st.step.n} of ${st.step.of}: ${esc(st.step.name)}</b>`);
-      const frames = await inPage("fill", ctx);
-      const filled = frames.flatMap((f) => f.filled || []);
-      const skipped = frames.flatMap((f) => f.skipped || []);
-      say(`<span class="muted">filled ${filled.length}${skipped.length ? `; left ${skipped.length}: ${esc(skipped.slice(0, 4).map((s) => s.slice(0, 50)).join("; "))}` : ""}</span>`);
-      if (st.needsResume && ctx.job?.has_resume && await attachFile("resume", true)) {
-        for (let i = 0; i < 40 && (await workdayStatus())?.needsResume; i++) await sleep(250); // upload finishing
-        say(`<span class="muted">attached your tailored resume (open it on Review to check)</span>`);
-      }
-      // Questions only you can answer stop here, unless you just said this step is done.
-      const yours = skipped.filter((s) => /answer this one yourself|saved answers disagree|more than one option fits/.test(s));
-      if (yours.length && !(trustThisStep && page === 0)) return await needsYou(step, yours, "Answer these on the page.");
-      if (stopAuto) return say(stopped);
-      if (!(await inPage("next")).some((r) => r.moved)) {
-        const errs = (await workdayStatus())?.errors || [];
-        return await needsYou(step, errs, errs.length ? "The page didn't move on. It says:" : "The page didn't move on.");
-      }
-    }
-  } catch (e) {
-    say(`<span class="bad">${esc(e.message)}</span>`);
-  } finally {
-    autoRunning = false;
-    $("auto").disabled = false;
-    $("stopAuto").hidden = true;
-  }
-}
+chrome.storage.onChanged.addListener((changes, area) => { if (area === "session" && changes.runs) showRun(); });
 $("previewResume").addEventListener("click", () => preview("resume").catch((e) => ($("attachResult").textContent = e.message)));
 $("attachResume").addEventListener("click", () => attachFile("resume").catch((e) => ($("attachResult").textContent = e.message)));
 $("attachCover").addEventListener("click", () => attachFile("cover").catch((e) => ($("attachResult").textContent = e.message)));
@@ -257,22 +187,4 @@ chrome.tabs.onActivated.addListener(refresh);
 // Workday moves from the posting to the application without a page load: a new URL is enough.
 chrome.tabs.onUpdated.addListener((_id, info) => { if (info.status === "complete" || info.url) refresh(); });
 
-// Applications opened after you shortlisted (background.js marks them): start Fill to Review as
-// soon as this tab shows the application form, once. Marks older than 3 hours are dropped.
-setInterval(async () => {
-  if (autoRunning || !ctx?.job) return;
-  const { autostart = {} } = await chrome.storage.session.get("autostart");
-  const since = autostart[ctx.job.id];
-  if (!since) return;
-  if (Date.now() - since > 3 * 3600 * 1000) {
-    delete autostart[ctx.job.id];
-    return chrome.storage.session.set({ autostart });
-  }
-  let st = null;
-  try { st = await workdayStatus(); } catch { return; } // e.g. a sign-in page that blocks scripts
-  if (!st || st.review || st.signIn || SIGN_IN.test(st.step.name)) return; // waits while you sign in
-  delete autostart[ctx.job.id];
-  await chrome.storage.session.set({ autostart });
-  fillToReview(false);
-}, 3000);
 refresh();

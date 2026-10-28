@@ -1,0 +1,91 @@
+<!doctype html>
+<html>
+<head>
+<meta charset="utf-8">
+<title>Workday-like posting and sign-in (account test fixture)</title>
+</head>
+<body>
+<!-- Shapes as on Workday sites (Oct 2026): Apply opens a menu with Apply Manually; signed out, the
+     application starts with Create Account, which links to Sign In. Buttons sit under a click_filter
+     overlay that takes the click. Each site has its own accounts. -->
+<header><a href="#" data-automation-id="utilityButtonSignIn">Sign In</a></header>
+<div id="page"></div>
+<pre id="result"></pre>
+<script>
+const accounts = {};
+let view = "posting", signedIn = false;
+window.clicks = [];
+const btn = (id, label) => `<div class="b"><div data-automation-id="click_filter" role="button" aria-label="${label}"
+  data-for="${id}" style="position:absolute;width:120px;height:30px"></div><button data-automation-id="${id}" tabindex="-1">${label}</button></div>`;
+function render() {
+  const page = document.getElementById("page");
+  if (view === "posting") page.innerHTML = `<h2>Data Analyst</h2><a data-automation-id="adventureButton" role="button" href="#">Apply</a>`;
+  if (view === "menu") page.innerHTML = `<div role="dialog"><a data-automation-id="autofillWithResume" href="#">Autofill with Resume</a>
+    <a data-automation-id="applyManually" href="#">Apply Manually</a></div>`;
+  if (view === "create") page.innerHTML = `<form><h2>Create Account</h2>
+    <label for="e">Email Address*</label><input id="e" data-automation-id="email" type="text">
+    <label for="p">Password*</label><input id="p" data-automation-id="password" type="password">
+    <label for="v">Verify New Password*</label><input id="v" data-automation-id="verifyPassword" type="password">
+    <input type="checkbox" id="c" data-automation-id="createAccountCheckbox"><label for="c">Yes, I have read and consent to the terms</label>
+    ${btn("createAccountSubmitButton", "Create Account")}
+    <button type="button" data-automation-id="signInLink">Sign In</button></form>`;
+  if (view === "signin") page.innerHTML = `<form><h2>Sign In</h2>
+    <label for="e">Email Address*</label><input id="e" data-automation-id="email" type="text">
+    <label for="p">Password*</label><input id="p" data-automation-id="password" type="password">
+    ${btn("signInSubmitButton", "Sign In")}
+    <button type="button" data-automation-id="createAccountLink">Create Account</button></form>`;
+  if (view === "app") page.innerHTML = `<ol><li data-automation-id="progressBarActiveStep">current step 1 of 4\nMy Information</li></ol>`;
+}
+const error = (text) => document.querySelector("form").insertAdjacentHTML("beforeend", `<div data-automation-id="errorMessage">${text}</div>`);
+const val = (id) => document.getElementById(id).value;
+document.addEventListener("click", (e) => {
+  const t = e.target.closest("[data-automation-id]");
+  if (!t) return;
+  const id = t.getAttribute("data-automation-id") === "click_filter" ? t.dataset.for : t.getAttribute("data-automation-id");
+  window.clicks.push(id);
+  if (t.type !== "checkbox") e.preventDefault();
+  if (id === "adventureButton") view = "menu";
+  else if (id === "applyManually") view = signedIn ? "app" : "create";
+  else if (id === "signInLink") view = "signin";
+  else if (id === "createAccountLink") view = "create";
+  else if (id === "signInSubmitButton") {
+    if (accounts[val("e")] !== val("p")) return error("Wrong email address or password. Try again.");
+    signedIn = true; view = "app";
+  } else if (id === "createAccountSubmitButton") {
+    if (val("p") !== val("v")) return error("The passwords do not match.");
+    if (!document.getElementById("c").checked) return error("You must agree to the terms.");
+    if (accounts[val("e")]) return error("There is already an account with this email address.");
+    accounts[val("e")] = val("p"); signedIn = true; view = "app";
+  } else return;
+  setTimeout(render, 200);
+});
+render();
+</script>
+<script src="../matching.js"></script>
+<script src="../content.js"></script>
+<script>
+if (location.search.includes("run")) {
+  const api = window.__jobHunterApi, out = {};
+  const login = { email: "test.user@example.com", password: "Fixture-only-9x!" };
+  (async () => {
+    out.posting = api.status();
+    out.start = await api.start();
+    out.atCreate = api.status();
+    out.signinFirst = await api.account({ ...login, mode: "signin", consent: true }); // no account on this site yet
+    out.atSignin = api.status();
+    out.noConsent = await api.account({ ...login, mode: "create", consent: false });
+    out.create = await api.account({ ...login, mode: "create", consent: true });
+    out.afterCreate = api.status();
+    // Next application on the same site: the account exists; sign in works from the Create Account form.
+    signedIn = false; view = "posting"; render();
+    await api.start();
+    out.signinAgain = await api.account({ ...login, mode: "signin", consent: true });
+    out.afterSignin = api.status();
+    out.clicks = window.clicks;
+  })().then(
+    () => { document.getElementById("result").textContent = JSON.stringify(out); },
+    (e) => { document.getElementById("result").textContent = JSON.stringify({ error: String(e && e.stack || e) }); });
+}
+</script>
+</body>
+</html>
