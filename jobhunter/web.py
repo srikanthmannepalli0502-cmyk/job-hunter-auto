@@ -849,6 +849,8 @@ def make_handler(app: App, port: int):
                 if action == "decide":
                     decision = form.get("decision", "new")
                     job = app.tracker.set_decision(item, decision)
+                    # the extension opens the application once the resume is ready
+                    app.tracker.set_open_when_ready(item, decision == "shortlisted")
                     if decision == "shortlisted" and not job.kit_resume_path:
                         app.worker.submit(item, "resume")  # shortlisting generates the resume
                     back = form.get("back", "/")
@@ -949,6 +951,12 @@ def make_handler(app: App, port: int):
                     app.tracker.add_feedback(int(parts[1]), str(data.get("instructions", "")))
                     app.worker.submit(int(parts[1]), "resume")
                     return self.send_json({"queued": True})
+                if method == "GET" and parts == ["ready"]:
+                    return self.send_json({"jobs": [{"id": j.id, "title": j.title, "company": j.company, "url": j.job_url}
+                                                    for j in app.tracker.ready_to_open() if j.job_url]})
+                if method == "POST" and len(parts) == 2 and parts[0] == "opened" and parts[1].isdigit():
+                    app.tracker.set_open_when_ready(int(parts[1]), False)
+                    return self.send_json({"saved": True})
                 if method == "POST" and len(parts) == 2 and parts[0] == "progress" and parts[1].isdigit():
                     state = str(data.get("state", ""))
                     if state not in ("review", "needs_you", "clear"):

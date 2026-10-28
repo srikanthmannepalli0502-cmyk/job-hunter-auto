@@ -105,6 +105,7 @@ let stopAuto = false;
 let autoRunning = false; // the panel stays on the application's tab while this runs
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 const workdayStatus = async () => (await inPage("status")).find((s) => s.workday);
+const SIGN_IN = /sign in|sign-in|create account|log ?in|register/i;
 $("stopAuto").addEventListener("click", () => { stopAuto = true; });
 $("auto").addEventListener("click", () => fillToReview(false));
 $("autoResult").addEventListener("click", (e) => { if (e.target.id === "continueAuto") fillToReview(true); });
@@ -150,6 +151,9 @@ async function fillToReview(trustThisStep) {
         return await tellYou("review", st.step.name, "Check it and submit");
       }
       if (page >= 8) return await needsYou(st.step.name, [], "It went through 8 steps without reaching Review.");
+      if (SIGN_IN.test(st.step.name) || st.signIn) {
+        return await needsYou(st.step.name, [], "Sign in or create the account yourself; Job Hunter never does. Then continue.");
+      }
       const step = `step ${st.step.n} of ${st.step.of} (${st.step.name})`;
       say(`<b>Step ${st.step.n} of ${st.step.of}: ${esc(st.step.name)}</b>`);
       const frames = await inPage("fill", ctx);
@@ -250,5 +254,25 @@ $("applied").addEventListener("click", async () => {
 });
 
 chrome.tabs.onActivated.addListener(refresh);
-chrome.tabs.onUpdated.addListener((_id, info) => { if (info.status === "complete") refresh(); });
+// Workday moves from the posting to the application without a page load: a new URL is enough.
+chrome.tabs.onUpdated.addListener((_id, info) => { if (info.status === "complete" || info.url) refresh(); });
+
+// Applications opened after you shortlisted (background.js marks them): start Fill to Review as
+// soon as this tab shows the application form, once. Marks older than 3 hours are dropped.
+setInterval(async () => {
+  if (autoRunning || !ctx?.job) return;
+  const { autostart = {} } = await chrome.storage.session.get("autostart");
+  const since = autostart[ctx.job.id];
+  if (!since) return;
+  if (Date.now() - since > 3 * 3600 * 1000) {
+    delete autostart[ctx.job.id];
+    return chrome.storage.session.set({ autostart });
+  }
+  let st = null;
+  try { st = await workdayStatus(); } catch { return; } // e.g. a sign-in page that blocks scripts
+  if (!st || st.review || st.signIn || SIGN_IN.test(st.step.name)) return; // waits while you sign in
+  delete autostart[ctx.job.id];
+  await chrome.storage.session.set({ autostart });
+  fillToReview(false);
+}, 3000);
 refresh();

@@ -11,6 +11,12 @@
 <!-- Like a React field whose state never took the typed value: the page clears it again. -->
 <label for="ln">Last Name*</label><input id="ln" type="text">
 
+<!-- Like Workday: the field is re-rendered after input (a new element, same id, same value). -->
+<div id="cityWrap"><label for="city">City*</label><input id="city" type="text"></div>
+
+<!-- The page reformats the number it was given. -->
+<label for="ph">Phone Number*</label><input id="ph" type="text">
+
 <fieldset><legend>Do you currently require visa sponsorship?</legend>
   <input type="radio" name="now" id="nowY" value="y"><label for="nowY">Yes</label>
   <input type="radio" name="now" id="nowN" value="n"><label for="nowN">No</label>
@@ -41,6 +47,11 @@
 
 <script>
 document.getElementById("ln").addEventListener("input", (e) => setTimeout(() => { e.target.value = ""; }, 100));
+document.getElementById("city").addEventListener("input", (e) => setTimeout(() => {
+  const v = e.target.value;
+  document.getElementById("cityWrap").innerHTML = `<label for="city">City*</label><input id="city" type="text" value="${v}">`;
+}, 100));
+document.getElementById("ph").addEventListener("change", (e) => setTimeout(() => { e.target.value = "(315) 289-0183"; }, 100));
 document.querySelectorAll("button[aria-haspopup=listbox]").forEach((btn) => btn.addEventListener("click", () => {
   const ul = document.createElement("ul");
   ul.setAttribute("role", "listbox");
@@ -61,6 +72,8 @@ const CTX = {
   fields: [
     { key: "first_name", label: "First name", keywords: ["first name"], value: "Sam", exclude: [] },
     { key: "last_name", label: "Last name", keywords: ["last name"], value: "Doe", exclude: [] },
+    { key: "city", label: "City", keywords: ["city"], value: "Syracuse", exclude: [] },
+    { key: "phone", label: "Phone", keywords: ["phone"], value: "+1-315-289-0183", exclude: [] },
     { key: "country", label: "Country", keywords: ["country"], value: "USA", exclude: ["phone", "code"] },
     { key: "needs_sponsorship", label: "Needs sponsorship", keywords: ["sponsorship", "sponsor"], value: "Yes", exclude: [] },
     { key: "work_authorized", label: "Authorized to work", keywords: ["authorized to work"], value: "Yes", exclude: [] },

@@ -169,6 +169,12 @@ pip install -r requirements.txt
    the page shows an error; after you answer, *I've filled it, continue* goes on from there. Jobs
    waiting on you are listed under *Waiting on you* in the app.
 
+   With the extension installed, shortlisting is enough to start: once the tailored resume is
+   ready, the extension opens the application in a new tab (at most 3 at a time; turn it off in
+   the extension settings). You click the posting's *Apply* and sign in; when the application
+   form appears and the Job Hunter panel is open, *Fill to Review* starts by itself. Sign-in and
+   account pages are always left to you.
+
 Job Hunter never submits applications for you, and never fills passwords, SSN, passport, bank or
 date-of-birth fields. The only button it presses is Workday's page-footer next button
 (`data-automation-id` `pageFooterNextButton` or `bottom-navigation-next-button`), and only while it

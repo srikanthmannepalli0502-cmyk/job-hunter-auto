@@ -31,6 +31,8 @@ test("fill() leaves fail-closed, ambiguous and dropped fields to you", { skip: !
   const filled = Object.fromEntries(r.filled.map((f) => [f.label, f.value]));
   assert.deepEqual(filled, {
     "First Name": "Sam",
+    "City": "Syracuse",                // re-rendered by the page: still filled
+    "Phone Number": "+1-315-289-0183", // reformatted by the page: still filled
     "Country": "United States of America",
     "Are you legally authorized to work in the United States?": "Yes",
   });

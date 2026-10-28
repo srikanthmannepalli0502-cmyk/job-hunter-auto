@@ -6,7 +6,7 @@
 // Which answer and option to use comes from matching.js (injected first). Every value is read back
 // after filling: one the page didn't keep is reported as skipped, not filled.
 (() => {
-  const VERSION = 11;
+  const VERSION = 12;
   if (window.__jobHunterApi && window.__jobHunterApi.version >= VERSION) return;
   const M = window.__jobHunterMatch;
   if (!M) throw new Error("Job Hunter: matching.js must be injected before content.js");
@@ -365,6 +365,15 @@
     return label;
   }
   const sameText = (a, b) => clean(a).toLowerCase() === clean(b).toLowerCase();
+  // Reading a value back: Workday re-renders a field after it's filled (the old element is gone,
+  // the new one has the same id) and reformats some values ("+1-315-289-0183" -> "315-289-0183").
+  const live = (el) => (el.isConnected ? el : (el.id && document.getElementById(el.id)) || el);
+  const digits = (x) => String(x || "").replace(/\D/g, "");
+  function kept(actual, wanted) {
+    if (sameText(actual, wanted) || (M.norm(actual) && M.norm(actual) === M.norm(wanted))) return true;
+    const a = digits(actual), w = digits(wanted);
+    return w.length >= 7 && a.length >= 7 && (a.endsWith(w) || w.endsWith(a)) && !/[a-z]/i.test(String(wanted));
+  }
   // A <select> still on "Select One" is empty even when that option has no value="" of its own.
   const hasValue = (el) => el.tagName === "SELECT"
     ? el.selectedIndex >= 0 && !!el.value.trim() && !PLACEHOLDER.test(clean(el.options[el.selectedIndex].text))
@@ -444,10 +453,10 @@
         if (v !== undefined) {
           const where = `${sec.kind} ${sec.n}: ${label}`;
           if (type === "checkbox") {
-            if (v === "check" && !el.checked) { el.click(); note(where, "checked", "master resume", () => el.checked); }
+            if (v === "check" && !el.checked) { el.click(); note(where, "checked", "master resume", () => live(el).checked); }
           } else if (!(el.value || "").trim()) {
             setValue(el, v);
-            note(where, v, "master resume", () => el.isConnected && sameText(el.value, v));
+            note(where, v, "master resume", () => kept(live(el).value, v));
           }
           continue;
         }
@@ -476,21 +485,21 @@
         const d = ans.status === "none" ? M.derived(label, ctx) : null;
         if (ans.status !== "matched" && !d) { if (label) skipped.push(why(label, ans.status)); continue; }
         const r = d ? await chooseFromButtonAny(el, d.values, label) : await chooseFromButton(el, ans.value, label);
-        if (r.text) note(label, r.text, d ? d.from : ans.from, () => sameText(el.innerText, r.text));
+        if (r.text) note(label, r.text, d ? d.from : ans.from, () => kept(live(el).innerText, r.text));
         else skipped.push(why(label, r.reason, d ? d.values[0] : ans.value));
         continue;
       }
       if (hasSelection(el) || hasValue(el)) continue; // never overwrite what's there
       if (isPrompt(el) && /\bskills\b/i.test(label) && ctx.history?.skills?.length) {
         const added = await addSkills(el, ctx.history.skills);
-        if (added.length) note(label, added.join(", "), "your resume skills", () => hasSelection(el));
+        if (added.length) note(label, added.join(", "), "your resume skills", () => hasSelection(live(el)));
         continue;
       }
       const ans = answer(label);
       const d = ans.status === "none" && isPrompt(el) ? M.derived(label, ctx) : null; // "how did you hear"
       if (d) {
         const r = await chooseFromPromptAny(el, d.values, label);
-        if (r.text) note(label, r.text, d.from, () => selectedItems(el).some((li) => sameText(li.innerText, r.text.split(" > ").pop())));
+        if (r.text) note(label, r.text, d.from, () => selectedItems(live(el)).some((li) => kept(li.innerText, r.text.split(" > ").pop())));
         else skipped.push(r.reason === "ambiguous" ? why(label, r.reason, d.values[0]) : `${label} (pick it from the list)`);
         continue;
       }
@@ -501,25 +510,25 @@
         const alt = M.derived(label, ctx);
         const r = await chooseFromPromptAny(el, [ans.value, ...(alt ? alt.values : [])], label); // browses categories too
         const from = r.value && alt && r.value !== ans.value ? alt.from : ans.from;
-        if (r.text) note(label, r.text, from, () => selectedItems(el).some((li) => sameText(li.innerText, r.text.split(" > ").pop())));
+        if (r.text) note(label, r.text, from, () => selectedItems(live(el)).some((li) => kept(li.innerText, r.text.split(" > ").pop())));
         else skipped.push(r.reason === "ambiguous" ? why(label, r.reason, ans.value) : `${label} (pick it from the list)`);
         continue;
       }
       if (el.tagName === "SELECT") {
         const r = chooseOption(el, ans.value, label);
-        if (r.option) note(label, r.option.text, ans.from, () => el.selectedIndex === r.option.el.index, el);
+        if (r.option) note(label, r.option.text, ans.from, () => live(el).selectedIndex === r.option.el.index, el);
         else skipped.push(why(label, r.reason, ans.value));
         continue;
       }
       setValue(el, ans.value);
-      note(label, ans.value, ans.from, () => el.isConnected && sameText(el.value, ans.value), el);
+      note(label, ans.value, ans.from, () => kept(live(el).value, ans.value), el);
     }
 
     await sleep(600); // let the page re-render; React and Workday sometimes reset what was typed
     const filled = [];
     for (const d of done) {
       if (!d.kept()) { skipped.push(why(d.label, "dropped", d.value.slice(0, 40))); continue; }
-      if (d.el) d.el.style.outline = "2px solid #2f7d4f";
+      if (d.el) live(d.el).style.outline = "2px solid #2f7d4f";
       filled.push({ label: d.label, value: d.value.replace(/\s+/g, " ").slice(0, 80), from: d.from });
     }
     return { filled, skipped };
@@ -613,7 +622,7 @@
   function status() {
     const s = step();
     return { workday: !!s, step: s, review: atReview(s), next: !!nextButton(), needsResume: needsResume(),
-             errors: pageErrors() };
+             signIn: !!document.querySelector('input[type="password"]'), errors: pageErrors() };
   }
 
   // Press "Save and Continue" once and wait for the next step. Re-checks the button right before

@@ -262,3 +262,22 @@ def test_fill_to_review_progress_shows_until_you_submit(server):
     assert "at Review" not in waiting and "needs you" in waiting
     httpx.post(f"{base}/api/x/progress/{beta.id}", json={"state": "clear"}, headers=h)
     assert app.tracker.get_job(beta.id).apply_progress is None
+
+
+def test_shortlisting_opens_the_application_once_the_resume_is_ready(server, monkeypatch):
+    monkeypatch.setattr("jobhunter.pipeline.make_resume",
+                        lambda profile, tracker, job_id: (tracker.set_kit(job_id, resume_path="r.pdf"), ("r.pdf", []))[1])
+    base, app = server()
+    ingest(base, ["Acme", "Beta"])
+    acme, beta = sorted(app.tracker.top_jobs(limit=5), key=lambda j: j.company)
+    h = {"X-Extension-Key": app.extension_key()}
+    app.tracker.set_kit(beta.id, resume_path="old.pdf")  # shortlisted before: not opened by surprise
+    httpx.post(f"{base}/decide/{acme.id}", data={"decision": "shortlisted"}, follow_redirects=False)
+    for _ in range(100):
+        if app.tracker.get_job(acme.id).kit_resume_path:
+            break
+        time.sleep(0.05)
+    ready = httpx.get(f"{base}/api/x/ready", headers=h).json()["jobs"]
+    assert [j["id"] for j in ready] == [acme.id]
+    httpx.post(f"{base}/api/x/opened/{acme.id}", json={}, headers=h)
+    assert httpx.get(f"{base}/api/x/ready", headers=h).json()["jobs"] == []
