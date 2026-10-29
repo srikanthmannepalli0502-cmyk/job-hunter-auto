@@ -12,13 +12,14 @@ async function api(path, { method = "GET", body = null, raw = false } = {}) {
     headers: { "X-Extension-Key": key, ...(body ? { "Content-Type": "application/json" } : {}) },
     body: body ? JSON.stringify(body) : null,
   });
-  if (raw) {
-    if (!resp.ok) throw new Error((await resp.json().catch(() => ({}))).error || `HTTP ${resp.status}`);
-    return resp;
+  if (!resp.ok) {
+    // The app answers in JSON; anything else came from in between (e.g. Azure), so say what and where.
+    const text = await resp.text().catch(() => "");
+    let error = "";
+    try { error = JSON.parse(text).error || ""; } catch { /* not JSON */ }
+    throw new Error(error || `HTTP ${resp.status} from ${path.split("?")[0]}: ${text.replace(/<[^>]*>/g, " ").replace(/\s+/g, " ").trim().slice(0, 150)}`);
   }
-  const data = await resp.json().catch(() => ({}));
-  if (!resp.ok) throw new Error(data.error || `HTTP ${resp.status}`);
-  return data;
+  return raw ? resp : resp.json().catch(() => ({}));
 }
 
 // The job's tailored resume (or cover note) as content.js's attach() takes it.
