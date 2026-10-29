@@ -203,6 +203,7 @@
   // where it found the job, whether the company is in your work history, your phone type.
   // Candidates are tried in order through resolveOption; an ambiguous one is skipped, never guessed.
   // Never for fail-closed topics. {values: [...], from} | null.
+  const MONTHS = ["jan", "feb", "mar", "apr", "may", "jun", "jul", "aug", "sep", "oct", "nov", "dec"];
   const HEARD = /\bhow did you (first |initially )?(hear|learn|find out)\b|\breferral source\b|^(source|candidate source|how did you hear)$/;
   const BEFORE = /\b(currently|previously|ever|before|formerly|in the past)\b/;
   const EMPLOYED = /\b(work|worked|working|employed|employee|employment|contractor|consultant|intern)\b/;
@@ -211,6 +212,39 @@
     if (!label || topic(label)) return null;
     const job = ctx.job || {};
     const l = norm(generalize(label, job.company));
+    // Your graduation month, from the resume ("Dec 2026"); content.js writes it as the box asks (YYYY-MM).
+    if (/\b(expected )?graduation (date|month)\b|\bwhen (do|will) you graduate\b|\b(degree )?completion date\b/.test(l)) {
+      const end = ctx.history?.education?.[0]?.end || "";
+      const m = end.match(/([A-Za-z]{3})[a-z]*\.?\s+(\d{4})/);
+      const month = m ? MONTHS.indexOf(m[1].toLowerCase()) + 1 : 0;
+      return month ? { values: [], date: { year: +m[2], month }, from: "your resume's graduation date" } : null;
+    }
+    // "Do you have 3+ years of ... experience?": counted from the dates of your jobs on the resume
+    // (internships left out, overlapping jobs counted once).
+    const years = l.match(/^(do|have|are) you\b.*?\b(\d{1,2})\s*(\+|or more|plus)?\s*years?\b.*\bexperience\b/);
+    // Only total work experience; "5+ years of experience with SQL" is about a skill: yours.
+    const kind = l.replace(/^.*?\byears?\b/, "").replace(/\bexperience\b.*$/, "").replace(/\b(of|in|the)\b/g, " ").trim();
+    const general = /^((relevant|professional|work|working|industry|full time|non internship|related|paid|total|post graduate|overall)\s*)*$/;
+    if (years && general.test(kind) && !/\bexperience (with|in|using|on)\b/.test(l)) {
+      const jobs = (ctx.history?.jobs || []).filter((j) => !/\bintern(ship)?\b/i.test(j.title || ""));
+      const at = (mmYYYY) => { const [mm, yyyy] = (mmYYYY || "").split("/"); return yyyy ? +yyyy * 12 + (+mm - 1) : null; };
+      const now = new Date().getFullYear() * 12 + new Date().getMonth();
+      const spans = jobs.map((j) => [at(j.start), j.current ? now : at(j.end)]).filter(([a, b]) => a !== null && b !== null && b >= a)
+        .sort((x, y) => x[0] - y[0]);
+      let months = 0, upTo = -Infinity;
+      for (const [a, b] of spans) { const from = Math.max(a, upTo); if (b > from) months += b - from; upTo = Math.max(upTo, b); }
+      if (!spans.length) return null;
+      return { values: [months >= +years[2] * 12 ? "Yes" : "No"], from: `your work history (${Math.floor(months / 12)} years ${months % 12} months)` };
+    }
+    // "Are you currently a student?": yes while the degree on your resume hasn't ended yet.
+    if (/\b(currently (a |an )?(student|enrolled)|are you (a )?(current )?student|currently in school)\b/.test(l)) {
+      const end = ctx.history?.education?.[0]?.end || "";
+      const m = end.match(/([A-Za-z]{3})[a-z]*\.?\s+(\d{4})|(\d{4})/);
+      if (!m) return null;
+      const month = m[1] ? MONTHS.indexOf(m[1].toLowerCase()) : 11;
+      const ends = new Date(+(m[2] || m[3]), Math.max(0, month) + 1, 0);
+      return { values: [ends > new Date() ? "Yes" : "No"], from: "your resume's graduation date" };
+    }
     // The follow-up to "How did you hear": which careers site (amazon.jobs: 'If "Amazon Career Site"
     // please specify' -> Amazon.jobs). The site the posting is on, by its address.
     if (/\b(please specify|specify which|which (career |careers )?(site|website))\b/.test(l) &&

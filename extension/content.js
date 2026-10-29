@@ -8,7 +8,7 @@
 // Which answer and option to use comes from matching.js (injected first). Every value is read back
 // after filling: one the page didn't keep is reported as skipped, not filled.
 (() => {
-  const VERSION = 23;
+  const VERSION = 26;
   if (window.__jobHunterApi && window.__jobHunterApi.version >= VERSION) return;
   const M = window.__jobHunterMatch;
   if (!M) throw new Error("Job Hunter: matching.js must be injected before content.js");
@@ -55,7 +55,7 @@
     // (amazon.jobs keeps the label in a block beside the dropdown's).
     if (isCombo(el)) {
       for (let a = el.parentElement, i = 0; a && i < 6; a = a.parentElement, i++) {
-        const before = [...a.querySelectorAll("label, legend")].filter((l) => !l.closest('[role="listbox"]') &&
+        const before = [...a.querySelectorAll("label, legend")].filter((l) => !l.closest('[role="listbox"]') && !l.contains(el) &&
           clean(l.innerText) && (l.compareDocumentPosition(el) & Node.DOCUMENT_POSITION_FOLLOWING));
         if (before.length) return clean(before.pop().innerText);
       }
@@ -70,7 +70,7 @@
       if (lab) parts.push(lab.innerText);
     }
     const wrap = el.closest("label");
-    if (wrap) parts.push(wrap.innerText);
+    if (wrap && !wrap.querySelector('select, [role="listbox"], [role="combobox"]')) parts.push(wrap.innerText);
     const field = el.closest(".field, .form-group, .application-question, li, td");
     if (field && !parts.join("").trim()) {
       const lab = field.querySelector("label, legend, .label");
@@ -101,6 +101,8 @@
     (el.getAttribute("role") === "combobox" || el.getAttribute("aria-haspopup") === "listbox");
   const isListButton = (el) => (el.tagName === "BUTTON" && el.getAttribute("aria-haspopup") === "listbox") || isCombo(el);
   const shownText = (el) => clean(el.tagName === "INPUT" ? el.value : el.innerText);
+  // The <select> a Select2 box stands for (Select2 puts its box right after it).
+  const select2Of = (el) => { const s = el.closest(".select2-container")?.previousElementSibling; return s?.tagName === "SELECT" ? s : null; };
   function isPrompt(el) {
     if (el.tagName !== "INPUT") return false;
     return el.getAttribute("data-uxi-widget-type") === "selectinput" || el.getAttribute("role") === "combobox"
@@ -114,6 +116,10 @@
     return [...document.querySelectorAll("input, textarea, select, button[aria-haspopup='listbox'], [role='combobox']")].filter(
       (el) => (isListButton(el) || !SKIP_TYPES.has((el.type || "").toLowerCase())) && !el.disabled && visible(el)
         && !(el.tagName === "INPUT" && el.parentElement?.closest('[role="combobox"]')) // one combobox, not its inner box
+        // Select2 draws a box over a hidden <select>: fill the <select> when it holds the options;
+        // when they load as you type (amazon.jobs's School name), use the box and its search.
+        && !(el.closest(".select2-container") && (select2Of(el)?.options.length || 0) > 1)
+        && !(el.tagName === "SELECT" && el.classList.contains("select2-hidden-accessible") && el.options.length <= 1)
     );
   }
 
@@ -207,7 +213,10 @@
   // Workday button dropdown: open it, click the matching option.
   // Open a dropdown and read its options: a click, or for a combobox that opens from the keyboard,
   // the down arrow.
-  async function openDropdown(btn) {
+  // A dropdown whose options load as you type shows a search box once open: `query` is typed
+  // there (Select2: "Please enter 1 or more characters", then the matches).
+  const NOT_AN_OPTION = /^(searching|loading|no results|no matches|please enter|type to search)/i;
+  async function openDropdown(btn, query = "") {
     const before = new Set(optionEls());
     press(btn);
     let opts = await waitForOptions(isCombo(btn) ? 1200 : 2000, before);
@@ -216,10 +225,23 @@
       btn.dispatchEvent(new KeyboardEvent("keydown", { key: "ArrowDown", code: "ArrowDown", keyCode: 40, which: 40, bubbles: true, cancelable: true }));
       opts = await waitForOptions(1500, before);
     }
+    opts = opts.filter((o) => !NOT_AN_OPTION.test(o.text));
+    const search = [...document.querySelectorAll('input.select2-search__field, input[role="searchbox"], input[aria-autocomplete="list"]')]
+      .find((i) => visible(i) && i !== btn);
+    if (!opts.length && search && query) {
+      search.focus();
+      typeSearch(search, query);
+      search.dispatchEvent(new KeyboardEvent("keyup", { key: query.slice(-1), bubbles: true }));
+      for (let i = 0; i < 20 && !opts.length; i++) {
+        await sleep(300);
+        opts = optionEls().map((el) => ({ el, text: clean(el.innerText || el.getAttribute("aria-label") || "") }))
+          .filter((o) => o.text && !NOT_AN_OPTION.test(o.text));
+      }
+    }
     return opts;
   }
   async function chooseFromButton(btn, answer, label) {
-    const r = pickOption(await openDropdown(btn), answer, label);
+    const r = pickOption(await openDropdown(btn, answer), answer, label);
     if (r.option) { press(r.option.el); await sleep(300); return { text: r.option.text }; }
     key(document.activeElement || btn, "Escape");
     return r;
@@ -255,7 +277,7 @@
   }
 
   async function chooseFromButtonAny(btn, values, label) {
-    const r = pickAny(await openDropdown(btn), values, label);
+    const r = pickAny(await openDropdown(btn, values[0]), values, label);
     if (r.option) { press(r.option.el); await sleep(300); return { text: r.option.text, value: r.value }; }
     key(document.activeElement || btn, "Escape");
     return r;
@@ -561,11 +583,27 @@
         continue;
       }
       const ans = answer(label);
-      const d = ans.status === "none" && isPrompt(el) ? M.derived(label, ctx) : null; // "how did you hear"
+      const d = ans.status === "none" && (isPrompt(el) || el.tagName === "SELECT") ? M.derived(label, ctx) : null; // "how did you hear"
+      if (d && el.tagName === "SELECT") {
+        const r = chooseOptionAny(el, d.values, label);
+        if (r.option) note(label, r.option.text, d.from, () => live(el).selectedIndex === r.option.el.index, el);
+        else skipped.push(why(label, r.reason, d.values[0]));
+        continue;
+      }
       if (d) {
         const r = await chooseFromPromptAny(el, d.values, label);
         if (r.text) note(label, r.text, d.from, () => selectedItems(live(el)).some((li) => kept(li.innerText, r.text.split(" > ").pop())));
         else skipped.push(r.reason === "ambiguous" ? why(label, r.reason, d.values[0]) : `${label} (pick it from the list)`);
+        continue;
+      }
+      // A date box an answer follows from (graduation month), written as the box asks.
+      const dated = ans.status === "none" && !isPrompt(el) && el.tagName !== "SELECT" ? M.derived(label, ctx) : null;
+      if (dated?.date) {
+        const { year, month } = dated.date, mm = String(month).padStart(2, "0");
+        const hint = `${el.placeholder || ""} ${el.type}`;
+        const value = /yyyy-mm|month/i.test(hint) ? `${year}-${mm}` : /mm\/yyyy/i.test(hint) ? `${mm}/${year}` : `${mm}/${year}`;
+        setValue(el, value);
+        note(label, value, dated.from, () => kept(live(el).value, value), el);
         continue;
       }
       if (ans.status !== "matched") { if (label) skipped.push(why(label, ans.status)); continue; }
@@ -580,8 +618,10 @@
         continue;
       }
       if (el.tagName === "SELECT") {
-        const r = chooseOption(el, ans.value, label);
-        if (r.option) note(label, r.option.text, ans.from, () => live(el).selectedIndex === r.option.el.index, el);
+        // A saved answer first, then the derived names (a list with "Master's", not "Master's Degree").
+        const alt = M.derived(label, ctx);
+        const r = chooseOptionAny(el, [ans.value, ...(alt ? alt.values : [])], label);
+        if (r.option) note(label, r.option.text, r.value !== ans.value && alt ? alt.from : ans.from, () => live(el).selectedIndex === r.option.el.index, el);
         else skipped.push(why(label, r.reason, ans.value));
         continue;
       }
@@ -600,10 +640,14 @@
   }
 
   function chooseOption(select, answer, label) {
-    const r = pickOption([...select.options].map((o) => ({ el: o, text: o.text })), answer, label);
+    return chooseOptionAny(select, [answer], label);
+  }
+  function chooseOptionAny(select, values, label) {
+    const r = pickAny([...select.options].map((o) => ({ el: o, text: o.text })), values, label);
     if (!r.option) return r;
-    select.value = r.option.el.value;
-    select.dispatchEvent(new Event("change", { bubbles: true }));
+    r.option.el.selected = true;
+    select.dispatchEvent(new Event("input", { bubbles: true }));
+    select.dispatchEvent(new Event("change", { bubbles: true })); // Select2 redraws its box from this
     return r;
   }
 

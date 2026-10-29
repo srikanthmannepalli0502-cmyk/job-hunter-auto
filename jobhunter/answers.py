@@ -24,7 +24,7 @@ FIELDS = [
     ("website", "Portfolio / website", ["website", "portfolio", "personal site", "other url"]),
     ("school", "University", ["school", "university", "college", "institution"]),
     ("degree", "Degree", ["degree", "level of education", "highest education"]),
-    ("major", "Field of study", ["major", "field of study", "discipline", "area of study"]),
+    ("major", "Field of study", ["major", "field of study", "discipline", "area of study", "areas of study", "area s of study"]),
     ("gpa", "GPA", ["gpa", "grade point"]),
     ("graduation", "Graduation date", ["graduation", "expected graduation", "end date of study"]),
     ("work_authorized", "Authorized to work in the U.S.?", ["authorized to work", "legally authorized",
