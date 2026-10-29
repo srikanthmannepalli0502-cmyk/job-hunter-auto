@@ -8,7 +8,7 @@
 // Which answer and option to use comes from matching.js (injected first). Every value is read back
 // after filling: one the page didn't keep is reported as skipped, not filled.
 (() => {
-  const VERSION = 16;
+  const VERSION = 17;
   if (window.__jobHunterApi && window.__jobHunterApi.version >= VERSION) return;
   const M = window.__jobHunterMatch;
   if (!M) throw new Error("Job Hunter: matching.js must be injected before content.js");
@@ -691,13 +691,14 @@
   }
   // The posting's own Apply button (before the application starts). On Workday its adventureButton;
   // elsewhere a button or link that says Apply, on a page that has no application form on it yet.
+  // The page's own boxes, not a careers site's job search (keyword, location and its latitude/longitude).
+  const fields = () => controls().filter((c) => !/search|keyword|location|where|what|latitude|longitude/i.test(fieldText(c)));
   function applyButton() {
     if (step()) return null;
     const wd = byId("adventureButton");
     if (wd) return wd;
     if (loginForm() || document.querySelector('input[type="file"]')) return null;
-    const fields = controls().filter((c) => !/search|keyword|location|where|what/i.test(fieldText(c)));
-    if (fields.length >= 3) return null;
+    if (fields().length >= 3) return null;
     return buttons(/^(apply|apply now|apply here|apply online|apply for this (job|position|role)|apply to this (job|position|role)|start (your |my )?application|begin (your )?application)$/i)[0] || null;
   }
   const CAPTCHA = 'iframe[src*="recaptcha"], iframe[src*="hcaptcha"], iframe[src*="turnstile"], [data-automation-id*="captcha" i]';
@@ -707,20 +708,22 @@
     String.raw`\bno\s+longer\s+(?:accepting|taking|available|open|being\s+accepted)`,
     String.raw`\b(?:position|role|job|posting)\s+(?:is\s+)?no\s+longer\s+(?:available|open|active)`,
     String.raw`\bapplications?\s+(?:are|is)\s+(?:now\s+)?closed\b`, String.raw`\bthis\s+job\s+(?:has\s+)?expired\b`,
-    String.raw`\bpage\s+you\s+are\s+looking\s+for\s+(?:doesn't|does\s+not|no\s+longer)\s+exist`].join("|"), "i");
+    String.raw`\bpage\s+you\s+are\s+looking\s+for\s+(?:doesn't|does\s+not|no\s+longer)\s+exist`,
+    // amazon.jobs: "Sorry, the job you're looking for isn't available."
+    String.raw`\b(?:job|position|role|posting|opening|page)\s+(?:you're|you\s+are)\s+looking\s+for\s+(?:isn't|is\s+not|is\s+no\s+longer)\s+available`].join("|"), "i");
 
   function status() {
     const s = step();
     const login = loginForm();
     const text = s || login ? "" : (document.body?.innerText || "").slice(0, 4000);
     const posting = !!applyButton(), form = controls().length;
-    // Only on a page with no application on it: no step, sign-in, Apply button or form.
-    const closed = !s && !login && !posting && form < 3 ? (text.replace(/’/g, "'").match(CLOSED) || [""])[0] : "";
+    // Only on a page with no application on it: no step, sign-in, Apply button or form (a job search box is fine).
+    const closed = !s && !login && !posting && fields().length < 3 ? (text.replace(/’/g, "'").match(CLOSED) || [""])[0] : "";
     return { workday: !!s, step: s, review: atReview(s) || (!posting && finalPage()), next: !!nextButton(),
              needsResume: needsResume(), signIn: !!login, account: login ? login.kind : null,
              posting, closed, captcha: [...document.querySelectorAll(CAPTCHA)].some(visible),
              verifyEmail: /verify your (email|account)|verification (email|link)|activate your account|confirm your email/i.test(text),
-             form, errors: pageErrors(), title: clean(document.querySelector("h1, h2")?.innerText || document.title).slice(0, 80) };
+             form, fields: fields().length, errors: pageErrors(), title: clean(document.querySelector("h1, h2")?.innerText || document.title).slice(0, 80) };
   }
 
   // On the posting: press Apply, then (Workday) "Apply Manually": Job Hunter fills the form itself,

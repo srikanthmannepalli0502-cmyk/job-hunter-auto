@@ -16,7 +16,9 @@ CLOSED = re.compile(
     r"|\b(?:position|role|job|posting)\s+(?:is\s+)?no\s+longer\s+(?:available|open|active)"
     r"|\bapplications?\s+(?:are|is)\s+(?:now\s+)?closed\b"
     r"|\bthis\s+job\s+(?:has\s+)?expired\b"
-    r"|\b(?:we|we've|we\s+have)\s+(?:filled|closed)\s+(?:this|the)\s+(?:position|role)",
+    r"|\b(?:we|we've|we\s+have)\s+(?:filled|closed)\s+(?:this|the)\s+(?:position|role)"
+    # amazon.jobs: "Sorry, the job you're looking for isn't available."
+    r"|\b(?:job|position|role|posting|opening|page)\s+(?:you're|you\s+are)\s+looking\s+for\s+(?:isn't|is\s+not|is\s+no\s+longer)\s+available",
     re.I)
 
 # Sites we never fetch: their terms forbid automated access, or the page needs a sign-in.

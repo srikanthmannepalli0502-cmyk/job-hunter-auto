@@ -256,12 +256,16 @@ async function drive(tabId, run, trust) {
     }
     if (!st.workday && WORKDAY_HOST.test(host)) return waitHere("the Workday application didn't open");
     // A page with a few boxes (a job search) and no Apply, Next or Submit isn't an application.
-    if (!st.workday && !st.next && !st.review && !ONE_PAGE_HOST.test(host) && !st.needsResume && st.form < 8) {
+    if (!st.workday && !st.next && !st.review && !ONE_PAGE_HOST.test(host) && !st.needsResume && (st.fields ?? st.form) < 8) {
       return finish(run, "needs_you", "", `No Apply button or application form on this ${host} page. Open the application yourself, then click Continue and it fills it.`);
     }
 
     // A step of the application: Workday's, or another site's page with Next / Submit.
     if (run.pages >= 12) return finish(run, "needs_you", where, "It went through 12 pages without reaching Review.");
+    // Workday draws a step's title before its fields and buttons: wait for those first.
+    const page = `${tab.url}|${st.step?.n || st.title}`;
+    if (run.drawing?.page !== page) run.drawing = { page, waits: 0 };
+    if (st.workday && (st.form < 2 || !st.next) && run.drawing.waits++ < 10) { await pause(1500); continue; }
     const c = await context(tab);
     await say(run, st.step ? `Step ${st.step.n} of ${st.step.of}: ${st.step.name}` : `Page ${run.pages + 1}: ${st.title || host}`, "step");
     const { filled, skipped } = await fillPage(tabId, c);
@@ -272,13 +276,14 @@ async function drive(tabId, run, trust) {
     }
     await say(run, `filled ${filled.length}${attached ? " and attached your tailored resume (open it on Review to check)" : ""}${skipped.length ? `; left ${skipped.length}: ${skipped.slice(0, 4).map((s) => s.slice(0, 50)).join("; ")}` : ""}`, "muted");
     const yours = skipped.filter((s) => YOURS.test(s));
-    if (st.review || (!st.next && ONE_PAGE_HOST.test(host))) {
+    const now = { ...st, ...((await pageStatus(tabId)) || {}) }; // after filling, as the page is now
+    if (now.review || (!now.next && ONE_PAGE_HOST.test(host))) {
       await say(run, "Reached the last page. Check every answer and the resume, then submit yourself.", "ok");
       return finish(run, "review", where || "the form", skipped.length ? `Filled. Answer the ${skipped.length} left, then submit.` : "Check it and submit");
     }
     if (yours.length && !(trust && run.pages === 0)) return finish(run, "needs_you", where, `Answer these on the page: ${yours.slice(0, 3).join("; ")}`, yours);
     if (stopping.delete(tabId)) return finish(run, "stopped", where, "Stopped. Nothing past this step was touched.");
-    if (!st.next) return finish(run, "needs_you", where || "the form", "Filled this page, but it has no Next or Continue button Job Hunter can press. Finish it yourself.");
+    if (!now.next) return finish(run, "needs_you", where || "the form", `${filled.length ? "Filled this page, but it" : "Nothing on this page could be filled, and it"} has no Next or Continue button Job Hunter can press. Finish it yourself.`);
     const next = await inTab(tabId, "next");
     if (!next.some((r) => r.moved)) {
       const errs = (await pageStatus(tabId))?.errors || [];

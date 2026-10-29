@@ -243,3 +243,18 @@ test("while the confirmation email hasn't come it waits and looks again; it neve
   assert.deepEqual(out.opened, []);
   assert.equal(out.mail.length, 1);
 });
+
+test("a Workday step that draws its fields and Next a moment after its title is waited for, then filled", async () => {
+  const page = fakePage(STEPS);
+  page.view = "app";
+  const status = page.api.status;
+  let drawing = 3; // the first looks see only the step's title
+  page.api.status = () => {
+    const s = status();
+    return drawing-- > 0 ? { ...s, form: 0, next: false } : s;
+  };
+  const { ctx, session } = load(page);
+  await ctx.startRun(5, { jobId: 7 });
+  assert.equal(session.runs[5].state, "review");
+  assert.deepEqual(page.calls.filter((c) => c !== "status"), ["fill", "next", "fill", "attach", "next"]);
+});

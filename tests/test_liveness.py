@@ -18,6 +18,7 @@ def test_closed_wording():
     assert closed_phrase("Update: this position has been filled. Thanks all!")
     assert closed_phrase("We are no longer accepting applications for this role")
     assert closed_phrase("Applications are now closed.")
+    assert closed_phrase("Sorry, the job you’re looking for isn’t available.")  # amazon.jobs, curly quotes
     assert not closed_phrase("We fill roles quickly; apply soon. No longer than 3 days to hear back.")
     assert not closed_phrase("")
 
