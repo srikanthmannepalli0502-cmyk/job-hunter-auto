@@ -8,7 +8,7 @@
 // Which answer and option to use comes from matching.js (injected first). Every value is read back
 // after filling: one the page didn't keep is reported as skipped, not filled.
 (() => {
-  const VERSION = 28;
+  const VERSION = 29;
   if (window.__jobHunterApi && window.__jobHunterApi.version >= VERSION) return;
   const M = window.__jobHunterMatch;
   if (!M) throw new Error("Job Hunter: matching.js must be injected before content.js");
@@ -533,8 +533,18 @@
         added.push(title);
       }
     }
-    if (added.length) await sleep(600);
+    // Workday draws a new entry in several passes: what's typed before it's done shows on screen but
+    // never reaches Workday ("Invalid Date", a tick that undoes itself). Wait until the page is quiet.
+    if (added.length) await quiet(1200, 8000);
     return added;
+  }
+  async function quiet(ms, most) {
+    let last = Date.now();
+    const o = new MutationObserver(() => { last = Date.now(); });
+    o.observe(document.body, { subtree: true, childList: true, attributes: true });
+    const end = Date.now() + most;
+    while (Date.now() - last < ms && Date.now() < end) await sleep(200);
+    o.disconnect();
   }
 
   async function fill(ctx) {
