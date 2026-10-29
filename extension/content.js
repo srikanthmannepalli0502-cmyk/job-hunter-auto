@@ -8,7 +8,7 @@
 // Which answer and option to use comes from matching.js (injected first). Every value is read back
 // after filling: one the page didn't keep is reported as skipped, not filled.
 (() => {
-  const VERSION = 29;
+  const VERSION = 30;
   if (window.__jobHunterApi && window.__jobHunterApi.version >= VERSION) return;
   const M = window.__jobHunterMatch;
   if (!M) throw new Error("Job Hunter: matching.js must be injected before content.js");
@@ -173,14 +173,38 @@
       el.dispatchEvent(new KeyboardEvent("keyup", o));
     }
   }
+  // Focus as Workday sees it: the page may not have the keyboard (you clicked the side panel),
+  // so focus() alone fires no focus events and Workday ignores the keys.
+  function enter(el) {
+    el.focus();
+    el.dispatchEvent(new FocusEvent("focus"));
+    el.dispatchEvent(new FocusEvent("focusin", { bubbles: true }));
+    el.select?.();
+  }
   function typeDate(monthInput, yearInput, mm, yyyy) {
-    monthInput.focus();
-    monthInput.select?.();
+    enter(monthInput);
     typeKeys(monthInput, mm);
-    const next = document.activeElement === yearInput ? yearInput : (yearInput.focus(), yearInput.select?.(), yearInput);
+    const next = document.activeElement === yearInput ? yearInput : (enter(yearInput), yearInput);
     typeKeys(next, yyyy);
+    next.dispatchEvent(new FocusEvent("blur"));
     next.dispatchEvent(new FocusEvent("focusout", { bubbles: true }));
     next.blur();
+  }
+  // Workday: delete this step's Work Experience entries, so the next fill adds and types them fresh
+  // (an entry typed while it was still drawing keeps rejecting its dates). Only the "Delete"
+  // buttons inside the Work Experience section; the entries come back from your master resume.
+  async function redoWork() {
+    const group = () => [...document.querySelectorAll("[role=group][aria-labelledby]")]
+      .find((g) => /^work experience$/i.test(clean(textOf(g.getAttribute("aria-labelledby")))));
+    let removed = 0;
+    for (let k = 0; k < 8 && group(); k++) {
+      const del = [...group().querySelectorAll("button")].find((b) => visible(b) && /^delete$/i.test(clean(b.innerText)));
+      if (!del) break;
+      del.click();
+      removed++;
+      await quiet(600, 4000);
+    }
+    return { removed };
   }
   // Workday's search boxes search only on a full Enter (keydown, keypress, keyup).
   function key(el, k) {
@@ -993,6 +1017,7 @@
   window.__jobHunterApi = {
     status: () => status(),
     next: () => next(),
+    redoWork: () => redoWork(),
     start: () => start(),
     account: (a) => account(a),
     version: VERSION,

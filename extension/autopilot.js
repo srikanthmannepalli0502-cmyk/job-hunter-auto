@@ -291,6 +291,16 @@ async function drive(tabId, run, trust) {
     const next = await inTab(tabId, "next");
     if (!next.some((r) => r.moved)) {
       const errs = (await pageStatus(tabId))?.errors || [];
+      // Workday rejecting the Work Experience dates it shows: delete those entries and fill them
+      // fresh, once per step.
+      const key = `${tab.url}|${st.step?.n}`;
+      if (st.workday && !(run.redone ||= {})[key] && errs.some((e) => /\b(From|To)\b.*(required|Invalid Date)/i.test(e))) {
+        run.redone[key] = true;
+        const [r] = await inTab(tabId, "redoWork", null, true).catch(() => []);
+        await say(run, `Workday didn't keep the Work Experience dates: filling those entries again (${r?.removed || 0} removed)`, "warn");
+        moved();
+        continue;
+      }
       return finish(run, "needs_you", where, errs.length ? `The page didn't move on. It says: ${errs.join("; ")}` : "The page didn't move on.", errs);
     }
     run.pages++;

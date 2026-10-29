@@ -271,3 +271,21 @@ test("a page of only buttons with Skip & continue is a step: it presses it and g
   assert.equal(session.runs[5].state, "review");
   assert.ok(page.calls.includes("next"));
 });
+
+test("Workday rejecting the Work Experience dates: the entries are deleted and filled again, once", async () => {
+  const page = fakePage(STEPS);
+  page.view = "app";
+  const status = page.api.status, next = page.api.next;
+  let rejected = false, redone = 0;
+  page.api.status = () => ({ ...status(), errors: page.n === 1 && !rejected ? [] : page.n === 1 && redone === 0 ? ["Error-From The field From is required and must have a value."] : [] });
+  page.api.next = () => {
+    if (page.n === 1 && redone === 0) { rejected = true; return { moved: false, errors: ["Error-From The field From is required and must have a value."] }; }
+    return next();
+  };
+  page.api.redoWork = () => { redone++; return { removed: 2 }; };
+  const { ctx, session } = load(page);
+  await ctx.startRun(5, { jobId: 7 });
+  assert.equal(redone, 1);
+  assert.equal(session.runs[5].state, "review");
+  assert.deepEqual(page.calls.filter((c) => c !== "status"), ["fill", "next", "fill", "attach", "next", "redoWork", "fill", "next"]);
+});
