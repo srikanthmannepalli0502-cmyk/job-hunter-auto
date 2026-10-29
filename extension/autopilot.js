@@ -246,6 +246,7 @@ async function drive(tabId, run, trust) {
     }
 
     if (st.workday && SIGN_IN_STEP.test(st.step.name)) { await pause(2000); continue; } // its form is still drawing
+    if (st.workday) await focusOn(tabId);
     if (st.workday && st.review) {
       await say(run, "Reached Review. Check every answer and the resume, then submit yourself.", "ok");
       return finish(run, "review", st.step.name, "Check it and submit");
@@ -319,9 +320,30 @@ async function attachResume(tabId, jobId) {
   catch { return false; }
 }
 
+// Workday keeps a typed date only once focus really moves in a page that has the keyboard (your
+// click on the page did it). A run's page doesn't have it: you clicked the side panel, or the tab
+// was opened in the background. So for a Workday step the tab is told it is focused, through
+// Chrome's debugger (Chrome shows "Job Hunter started debugging this browser" until the run ends).
+// Only that one setting is used; nothing else goes through the debugger.
+const focused = new Set();
+async function focusOn(tabId) {
+  if (focused.has(tabId) || !chrome.debugger) return;
+  try {
+    await chrome.debugger.attach({ tabId }, "1.3");
+    await chrome.debugger.sendCommand({ tabId }, "Emulation.setFocusEmulationEnabled", { enabled: true });
+    focused.add(tabId);
+  } catch { /* DevTools is open on the tab, or you cancelled it: the run goes on without */ }
+}
+function focusOff(tabId) {
+  if (!focused.delete(tabId)) return;
+  chrome.debugger.detach({ tabId }).catch(() => {});
+}
+chrome.debugger?.onDetach.addListener(({ tabId }) => focused.delete(tabId));
+
 // End the run: a notification you can click to come back to the tab, and the job's state in the app.
 async function finish(run, state, step, note, items = []) {
   run.state = state;
+  focusOff(run.tabId);
   if (state !== "review") await say(run, note, state === "stopped" ? "warn" : "needs");
   else await saveRun(run.tabId, run);
   if (typeof checkReady === "function") checkReady(); // its place is free for the next ready job

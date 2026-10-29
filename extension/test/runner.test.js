@@ -44,7 +44,7 @@ function fakePage(steps) {
 
 function load(page, { url = "https://comcast.wd5.myworkdayjobs.com/en-US/careers/job/Data-Analyst_R123", mail = null } = {}) {
   const session = {}, local = { consentOnCreate: true };
-  const out = { notes: [], posts: [], targets: [], opened: [], mail: [] };
+  const out = { notes: [], posts: [], targets: [], opened: [], mail: [], debug: [] };
   const store = (obj) => ({
     get: async (k) => (typeof k === "string" ? { [k]: obj[k] } : { ...obj }),
     set: async (v) => { Object.assign(obj, JSON.parse(JSON.stringify(v))); },
@@ -54,6 +54,12 @@ function load(page, { url = "https://comcast.wd5.myworkdayjobs.com/en-US/careers
     tabs: { get: async (id) => ({ id, url: page.url || url, title: "Data Analyst" }),
             update: async (id, { url: to }) => { out.opened.push(to); page.onOpen?.(to); return {}; } },
     notifications: { create: (id, n) => out.notes.push({ id, ...n }) },
+    debugger: {
+      attach: async ({ tabId }) => { out.debug.push(`attach ${tabId}`); },
+      sendCommand: async ({ tabId }, method, params) => { out.debug.push(`${method} ${JSON.stringify(params)}`); },
+      detach: async ({ tabId }) => { out.debug.push(`detach ${tabId}`); },
+      onDetach: { addListener: () => {} },
+    },
     scripting: {
       executeScript: async ({ target, files, func, args }) => {
         if (files) return [];
@@ -288,4 +294,19 @@ test("Workday rejecting the Work Experience dates: the entries are deleted and f
   assert.equal(redone, 1);
   assert.equal(session.runs[5].state, "review");
   assert.deepEqual(page.calls.filter((c) => c !== "status"), ["fill", "next", "fill", "attach", "next", "redoWork", "fill", "next"]);
+});
+
+test("a Workday step runs with the tab told it's focused (Workday keeps dates only then), until the run ends", async () => {
+  const page = fakePage(STEPS);
+  const { ctx, out, session } = load(page);
+  await ctx.startRun(5, { jobId: 7 });
+  assert.equal(session.runs[5].state, "review");
+  assert.deepEqual(out.debug, ["attach 5", 'Emulation.setFocusEmulationEnabled {"enabled":true}', "detach 5"]);
+});
+
+test("other sites don't use the debugger", async () => {
+  const page = otherSite();
+  const { ctx, out } = load(page);
+  await ctx.startRun(5, { jobId: 7 });
+  assert.deepEqual(out.debug, []);
 });

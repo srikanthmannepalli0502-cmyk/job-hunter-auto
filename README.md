@@ -195,6 +195,12 @@ pip install -r requirements.txt
    page's top frame: on the sites the application's tab went through by itself (the posting and
    where its Apply led), never on a Google, Microsoft, LinkedIn, Apple or Amazon.com sign-in. A setting decides whether it ticks the Create Account form's terms box for you.
 
+**Workday steps and the debugger permission:** Workday keeps a typed date only when the page has
+the keyboard, and a run's page doesn't (you clicked the side panel, or the tab opened in the
+background). For a Workday step the extension tells the tab it is focused, through Chrome's
+debugger (`Emulation.setFocusEmulationEnabled`, nothing else). Chrome shows "Job Hunter started
+debugging this browser" until the run ends; cancelling it just leaves the dates for you.
+
 Job Hunter never submits applications for you, and never fills SSN, passport, bank or
 date-of-birth fields; the only password it types is your job-site login, as above. The buttons it
 presses are the posting's *Apply* / *Apply Manually* (before the application starts), the site's
