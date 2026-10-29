@@ -93,7 +93,7 @@ test("from the posting to Review: Apply, sign in or create the account, fill, at
   const run = session.runs[5];
   assert.equal(run.state, "review");
   assert.equal(run.title, "Data Analyst at Comcast");
-  assert.equal(out.notes.at(-1).title, "Ready for you to submit");
+  assert.equal(out.notes.at(-1).title, "Ready to submit: Data Analyst at Comcast"); // names the job: many fill at once
   assert.deepEqual(out.posts.map((p) => p.state), ["review"]);
   // The login only ever goes to the top frame.
   assert.ok(out.targets.filter((t) => t.name === "account").every((t) => !t.allFrames));
@@ -108,7 +108,7 @@ test("a question that's yours stops it; Continue goes on from that step", async 
   await ctx.startRun(5, { jobId: 7 });
   assert.equal(session.runs[5].state, "needs_you");
   assert.equal(page.n, 1);
-  assert.equal(out.notes.at(-1).title, "Job Hunter needs you");
+  assert.equal(out.notes.at(-1).title, "Needs you: Data Analyst at Comcast");
   assert.equal(out.notes.at(-1).buttons[0].title, "I've done it, continue");
   assert.match(out.posts.at(-1).note, /veteran/);
   await ctx.startRun(5, { trust: true });
@@ -210,7 +210,7 @@ test("amazon.jobs: Apply, the email-first sign-in, then each page with Next up t
   assert.deepEqual(page.calls.filter((c) => c !== "status"),
     ["start", "account:email", "account:signin", "fill", "next", "fill", "next", "fill"]);
   assert.equal(session.runs[5].state, "review");
-  assert.equal(out.notes.at(-1).title, "Ready for you to submit");
+  assert.equal(out.notes.at(-1).title, "Ready to submit: Data Analyst at Comcast"); // names the job: many fill at once
 });
 
 test("a new account the site asks to confirm by email: it opens the link from that email, then signs in", async () => {

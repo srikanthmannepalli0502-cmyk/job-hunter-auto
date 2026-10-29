@@ -12,7 +12,9 @@
     <label>Extension key<br><input id="key" type="password" style="width:100%"></label>
     <p class="muted">Find the key in your Job Hunter app: Profile &amp; answers &rarr; Show extension key.</p>
     <label><input id="autoOpen" type="checkbox"> When a shortlisted job's resume is ready, open the application
-      and fill it up to Review by itself (one at a time; you get a notification at Review or when it needs you)</label>
+      and fill it up to Review by itself, each in its own tab (you get a notification naming the job at Review or when it needs you)</label>
+    <label>At most <input id="maxOpen" type="number" min="1" max="25" style="width:4em"> applications filling at once
+      (the rest open as these reach Review, need you, or you close their tab)</label>
     <button id="save" class="primary">Save and test</button>
     <p id="status"></p>
     <p>Auto-open, last check: <span id="autoStatus" class="muted">not yet</span> <button id="checkNow">Check now</button></p>

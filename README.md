@@ -171,12 +171,14 @@ pip install -r requirements.txt
    waiting on you are listed under *Waiting on you* in the app.
 
    With the extension installed, shortlisting is all you do. Once the tailored resume is ready, the
-   extension opens the application in the front tab and does the rest with no side panel open:
+   extension opens the application in its own background tab and does the rest with no side panel open:
    it presses the posting's *Apply* (and Workday's *Apply Manually*), signs in with your saved
    job-site login (or creates the account when the site has none; amazon.jobs asks for the email
    first), confirms a new account from the site's email when it asks, then runs *Fill to Review*.
-   One application at a time; the most recently shortlisted opens first, and the next opens once
-   the last reaches Review or needs you. A posting that turns out closed is marked closed and
+   Every ready application opens and fills at the same time, each in its own tab (at most 10 at
+   once by default, set in the extension settings); the rest open as soon as one reaches Review,
+   needs you, or you close its tab. The most recently shortlisted opens first. Each notification
+   names its job ("Ready to submit: Data Scientist at Amazon"); clicking it brings that tab to the front. A posting that turns out closed is marked closed and
    skipped. It stops and asks you at a CAPTCHA, or a login that doesn't work.
 
    **Confirmation emails:** when a site sends a confirmation link or code after sign-up, the
@@ -184,7 +186,7 @@ pip install -r requirements.txt
    tab, searches for a recent email from that site, reads only that email, and opens its link (only
    a link to that same site) or types its code. It looks again each minute for up to 10 minutes,
    then asks you. Other mail is never read; only Gmail addresses are supported. Turn auto-opening
-   off in the extension settings. Keep Chrome open and not minimised: Chrome slows pages it can't show.
+   off in the extension settings. Keep Chrome open; the tabs fill in the background.
 
    **Job-site login:** one email and password for every job site, entered in the extension
    settings (*Make one* creates a strong password; use one you use nowhere else). It is encrypted

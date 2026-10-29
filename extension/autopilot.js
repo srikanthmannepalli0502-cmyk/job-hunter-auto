@@ -6,7 +6,8 @@
 // on you" list) at Review, at a question that's yours, a CAPTCHA or any error the page shows.
 // It never presses Submit.
 // Each tab's run lives in chrome.storage.session ("runs"), so it carries on if Chrome restarts
-// the service worker; tick() is called on page loads and every minute.
+// the service worker; tick() is called on page loads and every minute. Runs in different tabs go
+// on at the same time.
 
 const WORKDAY_HOST = /(^|\.)(myworkdayjobs|myworkdaysite|workday)\.com$/i;
 const ONE_PAGE_HOST = /(^|\.)(greenhouse\.io|lever\.co|ashbyhq\.com)$/i;
@@ -304,12 +305,16 @@ async function finish(run, state, step, note, items = []) {
   run.state = state;
   if (state !== "review") await say(run, note, state === "stopped" ? "warn" : "needs");
   else await saveRun(run.tabId, run);
+  if (typeof checkReady === "function") checkReady(); // its place is free for the next ready job
   if (state === "stopped") return;
-  const where = run.title || "This application";
+  // Many applications fill at once, so each notification names its job first; clicking it brings
+  // that application's tab to the front.
+  const job = run.title || "An application";
   chrome.notifications.create(`jh-${run.tabId}`, {
     type: "basic", iconUrl: "icon128.png", requireInteraction: true, priority: 2,
-    title: state === "review" ? "Ready for you to submit" : "Job Hunter needs you",
-    message: (state === "review" ? `${where} is at Review. Check it and submit.` : `${where}${step ? `, ${step}` : ""}: ${note}`).slice(0, 300),
+    title: `${state === "review" ? "Ready to submit" : "Needs you"}: ${job}`.slice(0, 120),
+    message: (state === "review" ? "At Review. Check every answer and the resume, then submit." : `${step ? `${step}: ` : ""}${note}`).slice(0, 300),
+    contextMessage: "Job Hunter · click to open its tab",
     ...(state === "needs_you" ? { buttons: [{ title: "I've done it, continue" }] } : {}),
   });
   if (run.jobId) {

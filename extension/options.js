@@ -1,9 +1,10 @@
 const $ = (id) => document.getElementById(id);
 
-chrome.storage.local.get(["appUrl", "key", "autoOpen"]).then(({ appUrl = "", key = "", autoOpen = true }) => {
+chrome.storage.local.get(["appUrl", "key", "autoOpen", "maxOpen"]).then(({ appUrl = "", key = "", autoOpen = true, maxOpen = MAX_OPEN }) => {
   $("appUrl").value = appUrl;
   $("key").value = key;
   $("autoOpen").checked = autoOpen;
+  $("maxOpen").value = maxOpen;
 });
 
 $("save").addEventListener("click", async () => {
@@ -12,7 +13,9 @@ $("save").addEventListener("click", async () => {
     $("status").textContent = "The address must start with https:// (or http://127.0.0.1 for a local app).";
     return;
   }
-  await chrome.storage.local.set({ appUrl, key: $("key").value.trim(), autoOpen: $("autoOpen").checked });
+  const maxOpen = Math.min(25, Math.max(1, parseInt($("maxOpen").value, 10) || MAX_OPEN));
+  $("maxOpen").value = maxOpen;
+  await chrome.storage.local.set({ appUrl, key: $("key").value.trim(), autoOpen: $("autoOpen").checked, maxOpen });
   $("status").textContent = "Testing...";
   try {
     const ctx = await api("/api/x/context?url=" + encodeURIComponent("https://example.com/"));

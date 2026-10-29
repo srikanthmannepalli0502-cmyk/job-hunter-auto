@@ -8,13 +8,20 @@
 // Which answer and option to use comes from matching.js (injected first). Every value is read back
 // after filling: one the page didn't keep is reported as skipped, not filled.
 (() => {
-  const VERSION = 15;
+  const VERSION = 16;
   if (window.__jobHunterApi && window.__jobHunterApi.version >= VERSION) return;
   const M = window.__jobHunterMatch;
   if (!M) throw new Error("Job Hunter: matching.js must be injected before content.js");
 
   const visible = (el) => !!(el.offsetWidth || el.offsetHeight || el.getClientRects().length);
-  const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+  // Applications fill in background tabs, where Chrome stretches a chain of timers to one a minute
+  // after five minutes. Ending each wait through a message (a new task) keeps the chain from
+  // forming, so a wait stays about a second at most.
+  const sleep = (ms) => new Promise((r) => setTimeout(() => {
+    const c = new MessageChannel();
+    c.port1.onmessage = () => { c.port1.close(); r(); };
+    c.port2.postMessage(0);
+  }, ms));
   const clean = (s) => (s || "").replace(/\s+/g, " ").replace(/\*/g, "").trim().slice(0, 300);
   const SKIP_TYPES = new Set(["hidden", "submit", "button", "reset", "image", "password", "search"]);
   const PLACEHOLDER = /^(select one|select|choose|choose one|--|none selected)?$/i;

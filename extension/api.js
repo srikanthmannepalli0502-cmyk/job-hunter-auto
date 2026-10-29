@@ -1,3 +1,6 @@
+// How many applications auto-open fills at once, unless the settings say otherwise.
+const MAX_OPEN = 10;
+
 // Calls to your Job Hunter app. The app address and extension key are kept in chrome.storage.local.
 async function settings() {
   const { appUrl = "", key = "" } = await chrome.storage.local.get(["appUrl", "key"]);
