@@ -160,3 +160,9 @@ test("field of study: your major, else Data Science, else Information Systems", 
   assert.equal(pick(["Accounting", "Computer Science", "Information Systems"]), "Information Systems");
   assert.equal(M.derived("Field of Study", withJob()), null); // no degree on record
 });
+
+test("a saved answer never crosses numbered questions: Address Line 2 isn't Address Line 1", () => {
+  const answers = [{ question: "Address Line 1", answer: "105 Concord Pl" }];
+  assert.equal(M.savedAnswer("Address Line 2", answers).status, "unmatched");
+  assert.equal(M.savedAnswer("Address line 1", answers).value, "105 Concord Pl");
+});

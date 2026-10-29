@@ -130,7 +130,9 @@
     if (topic(label)) return { status: "unmatched" };
     // Ordinary questions may reuse an answer to a nearly identical question, unless an equally
     // close one says something else.
-    const scored = answers.filter((a) => (a.answer || "").trim() && !topic(a.question))
+    // Never across different numbers: "Address Line 2" isn't "Address Line 1".
+    const numbers = (q) => (norm(q).match(/\d+/g) || []).join(",");
+    const scored = answers.filter((a) => (a.answer || "").trim() && !topic(a.question) && numbers(a.question) === numbers(label))
       .map((a) => [a.answer, similarity(a.question, label)]).filter(([, s]) => s >= 0.75).sort((x, y) => y[1] - x[1]);
     if (!scored.length) return { status: "unmatched" };
     const top = scored.filter(([, s]) => s >= scored[0][1] - 0.05).map(([v]) => v);

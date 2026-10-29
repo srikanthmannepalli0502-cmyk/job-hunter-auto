@@ -8,7 +8,7 @@
 // Which answer and option to use comes from matching.js (injected first). Every value is read back
 // after filling: one the page didn't keep is reported as skipped, not filled.
 (() => {
-  const VERSION = 26;
+  const VERSION = 27;
   if (window.__jobHunterApi && window.__jobHunterApi.version >= VERSION) return;
   const M = window.__jobHunterMatch;
   if (!M) throw new Error("Job Hunter: matching.js must be injected before content.js");
@@ -158,6 +158,29 @@
     el.dispatchEvent(new FocusEvent("blur"));
     el.dispatchEvent(new FocusEvent("focusout", { bubbles: true }));
     el.blur();
+  }
+  // Workday's date sections (Month, Year) take a date only as keystrokes: two month digits move
+  // it on to the year by itself. Values set any other way show, but Workday says "Invalid Date".
+  function typeKeys(el, text) {
+    for (const ch of text) {
+      const o = { key: ch, code: `Digit${ch}`, keyCode: 48 + +ch, which: 48 + +ch, bubbles: true, cancelable: true };
+      const go = el.dispatchEvent(new KeyboardEvent("keydown", o));
+      el.dispatchEvent(new KeyboardEvent("keypress", { ...o, charCode: 48 + +ch }));
+      if (go) {
+        el.dispatchEvent(new InputEvent("beforeinput", { bubbles: true, cancelable: true, inputType: "insertText", data: ch }));
+        document.execCommand("insertText", false, ch);
+      }
+      el.dispatchEvent(new KeyboardEvent("keyup", o));
+    }
+  }
+  function typeDate(monthInput, yearInput, mm, yyyy) {
+    monthInput.focus();
+    monthInput.select?.();
+    typeKeys(monthInput, mm);
+    const next = document.activeElement === yearInput ? yearInput : (yearInput.focus(), yearInput.select?.(), yearInput);
+    typeKeys(next, yyyy);
+    next.dispatchEvent(new FocusEvent("focusout", { bubbles: true }));
+    next.blur();
   }
   // Workday's search boxes search only on a full Enter (keydown, keypress, keyup).
   function key(el, k) {
@@ -518,6 +541,7 @@
     await addSections(ctx);
     const sensitive = new RegExp(ctx.sensitive, "i");
     const done = [], skipped = [];
+    const datesDone = new Set(); // Workday date boxes typed this time
     const doneRadio = new Set();
     // `kept` reads the field back; it runs once the page has had a moment to re-render.
     const note = (label, value, from, kept, el) => done.push({ label, value: String(value), from, kept, el });
@@ -534,6 +558,21 @@
         if (v === null) continue;
         if (v !== undefined) {
           const where = `${sec.kind} ${sec.n}: ${label}`;
+          const wrap = el.closest('[data-automation-id="dateInputWrapper"]');
+          if (wrap) { // Workday's Month / Year date: both at once, as keystrokes
+            if (datesDone.has(wrap)) continue;
+            datesDone.add(wrap);
+            const mIn = wrap.querySelector('[data-automation-id="dateSectionMonth-input"]');
+            const yIn = wrap.querySelector('[data-automation-id="dateSectionYear-input"]');
+            const mm = mIn && sectionValue(sec, mIn, ctx), yyyy = yIn && sectionValue(sec, yIn, ctx);
+            if (!mm || !yyyy) continue;
+            const shown = mIn.value === String(+mm) && yIn.value === yyyy;
+            if (shown && !formField(el)?.querySelector('[data-automation-id*="error" i]')) continue; // already right
+            typeDate(mIn, yIn, String(mm).padStart(2, "0"), yyyy);
+            note(where, `${String(mm).padStart(2, "0")}/${yyyy}`, "master resume",
+                 () => live(mIn).value === String(+mm) && live(yIn).value === yyyy);
+            continue;
+          }
           if (type === "checkbox") {
             if (v === "check" && !el.checked) { el.click(); note(where, "checked", "master resume", () => live(el).checked); }
           } else if (!(el.value || "").trim()) {
