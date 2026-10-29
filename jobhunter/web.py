@@ -595,8 +595,11 @@ class App:
         page = urlparse(url)
         if not page.netloc:
             return None
+        # The same site's other address counts too: the posting is on www.amazon.jobs, its
+        # application on account.amazon.jobs.
+        site = ".".join(page.netloc.split(":")[0].split(".")[-2:])
         with self.tracker.Session() as s:
-            candidates = list(s.scalars(select(Job).where(Job.job_url.ilike(f"%{page.netloc}%"))))
+            candidates = list(s.scalars(select(Job).where(Job.job_url.ilike(f"%{site}%"))))
         best, best_score = None, 0
         for j in candidates:
             posting = urlparse(j.job_url or "")

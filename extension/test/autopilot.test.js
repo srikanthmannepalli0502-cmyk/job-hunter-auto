@@ -34,7 +34,7 @@ test("autopilot presses Save and Continue up to Review and never Submit", { skip
   assert.equal(r.toQuestions.moved, true);
   assert.equal(r.questions.step.name, "Application Questions");
   assert.equal(r.questions.needsResume, true);
-  assert.deepEqual(r.submitLabel, { moved: false, reason: "no Save and Continue button" });
+  assert.deepEqual(r.submitLabel, { moved: false, reason: "no Next or Save and Continue button" });
   assert.equal(r.toReview.moved, true);
   assert.equal(r.review.review, true);
   assert.equal(r.review.next, false);

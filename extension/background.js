@@ -1,4 +1,4 @@
-importScripts("api.js", "vault.js", "autopilot.js");
+importScripts("api.js", "vault.js", "mail.js", "autopilot.js");
 
 // Clicking the toolbar icon opens the Job Hunter side panel.
 chrome.runtime.onInstalled.addListener(() => {
@@ -64,7 +64,7 @@ async function openReady() {
   if (!job) return "No shortlisted job waiting to open (its resume may still be in progress).";
   await api(`/api/x/opened/${job.id}`, { method: "POST", body: {} }); // once, even if a step below fails
   const tab = await chrome.tabs.create({ url: job.url, active: true });
-  await saveRun(tab.id, { tabId: tab.id, jobId: job.id, title: `${job.title} at ${job.company}`, state: "waiting",
+  await saveRun(tab.id, { tabId: tab.id, jobId: job.id, title: `${job.title} at ${job.company}`, state: "waiting", jobUrl: job.url,
                           lines: [{ text: "Opened after you shortlisted it; filling it up to Review.", kind: "muted" }],
                           tried: {}, starts: 0, pages: 0, since: Date.now(), progressAt: Date.now() });
   return `Opened ${job.title} at ${job.company}.`;

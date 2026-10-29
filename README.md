@@ -163,31 +163,41 @@ pip install -r requirements.txt
    everything and submit, then click *I submitted this application*; the app records which
    resume and cover note you sent.
 
-   On Workday, *Fill to Review* does this step by step: it fills the step, attaches the tailored
-   resume where the step asks for one, and presses *Save and Continue*, until the Review step.
+   *Fill to Review* does this page by page: it fills the page, attaches the tailored resume where
+   the page asks for one, and presses *Save and Continue* / *Next*, until Review (Workday's Review
+   step, or another site's page with a Submit button).
    It stops (with a desktop notification) at Review, or at a question only you can answer, or when
    the page shows an error; after you answer, *I've filled it, continue* goes on from there. Jobs
    waiting on you are listed under *Waiting on you* in the app.
 
    With the extension installed, shortlisting is all you do. Once the tailored resume is ready, the
    extension opens the application in the front tab and does the rest with no side panel open:
-   it presses the posting's *Apply* and *Apply Manually*, signs in with your saved job-site login
-   (or creates the account when that Workday site has none), then runs *Fill to Review*. One
-   application at a time; the next opens once the last reaches Review or needs you. Greenhouse,
-   Lever and Ashby forms are filled and the resume attached, then it tells you. It stops and asks
-   you at a CAPTCHA, an email-verification step, or a login that doesn't work. Turn auto-opening
+   it presses the posting's *Apply* (and Workday's *Apply Manually*), signs in with your saved
+   job-site login (or creates the account when the site has none; amazon.jobs asks for the email
+   first), confirms a new account from the site's email when it asks, then runs *Fill to Review*.
+   One application at a time; the most recently shortlisted opens first, and the next opens once
+   the last reaches Review or needs you. A posting that turns out closed is marked closed and
+   skipped. It stops and asks you at a CAPTCHA, or a login that doesn't work.
+
+   **Confirmation emails:** when a site sends a confirmation link or code after sign-up, the
+   extension opens Gmail (signed in in this Chrome as the saved login's address) in a background
+   tab, searches for a recent email from that site, reads only that email, and opens its link (only
+   a link to that same site) or types its code. It looks again each minute for up to 10 minutes,
+   then asks you. Other mail is never read; only Gmail addresses are supported. Turn auto-opening
    off in the extension settings. Keep Chrome open and not minimised: Chrome slows pages it can't show.
 
-   **Job-site login:** one email and password for every Workday site, entered in the extension
+   **Job-site login:** one email and password for every job site, entered in the extension
    settings (*Make one* creates a strong password; use one you use nowhere else). It is encrypted
    with a key Chrome generated and won't export, kept only in that browser, never sent to your
-   Job Hunter app, and only typed into Workday's own Sign In / Create Account forms in the page's
-   top frame. A setting decides whether it ticks the Create Account form's terms box for you.
+   Job Hunter app, and only typed into the job site's own Sign In / Create Account forms in the
+   page's top frame: on the sites the application's tab went through by itself (the posting and
+   where its Apply led), never on a Google, Microsoft, LinkedIn, Apple or Amazon.com sign-in. A setting decides whether it ticks the Create Account form's terms box for you.
 
 Job Hunter never submits applications for you, and never fills SSN, passport, bank or
 date-of-birth fields; the only password it types is your job-site login, as above. The buttons it
-presses are the posting's *Apply* / *Apply Manually* (before the application starts), Workday's
-*Sign In* / *Create Account*, and Workday's page-footer next button
+presses are the posting's *Apply* / *Apply Manually* (before the application starts), the site's
+own *Sign In* / *Create Account* / *Continue* (never *Sign in with Google* and the like), on other
+sites a *Next* / *Continue* / *Save and Continue* button, and Workday's page-footer next button
 (`data-automation-id` `pageFooterNextButton` or `bottom-navigation-next-button`), only while it
 reads *Save and Continue*, *Next* or *Continue*; never on the Review step, and never a footer button
 whose label mentions submit, apply, send, finish or confirm. Greenhouse, Lever and Ashby forms are

@@ -134,6 +134,12 @@ def test_extension_api(server, tmp_path):
     assert ctx["job"]["id"] == job.id and ctx["job"]["has_resume"] is False
     assert [f["key"] for f in ctx["fields"]] == ["email"]
     assert httpx.get(f"{base}/api/x/context", params={"url": "https://other.example/x"}, headers=h).json()["job"] is None
+    # The application on another address of the same site, by the posting's id (amazon.jobs).
+    with app.tracker.Session() as s:
+        s.get(type(job), job.id).job_url = "https://www.amazon.jobs/en/jobs/10589280/data-scientist"
+        s.commit()
+    apply_page = "https://account.amazon.jobs/en-US/applicant/jobs/10589280/apply"
+    assert httpx.get(f"{base}/api/x/context", params={"url": apply_page}, headers=h).json()["job"]["id"] == job.id
 
     # Resume download: 404 until there is one, then the file with its name.
     assert httpx.get(f"{base}/api/x/resume/{job.id}", headers=h).status_code == 404

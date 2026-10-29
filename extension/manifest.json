@@ -1,7 +1,7 @@
 {
   "manifest_version": 3,
   "name": "Job Hunter",
-  "version": "1.3.0",
+  "version": "1.4.0",
   "description": "Fill job applications from your Job Hunter profile, attach the tailored resume, save new answers and ask an assistant about the job.",
   "permissions": [
     "storage",

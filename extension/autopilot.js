@@ -1,9 +1,10 @@
 // Fill to Review, run by the background service worker so no side panel has to be open. For one
-// application tab it goes from the posting to Review: presses the posting's Apply, signs in to (or
-// creates) the Workday account with your saved job-site login, fills each step, attaches the
-// tailored resume and presses Save and Continue. It stops and tells you (a notification and the
-// app's "Waiting on you" list) at Review, at a question that's yours, a CAPTCHA, an email
-// verification or any error the page shows. It never presses Submit.
+// application tab it goes from the posting to Review on any site: presses the posting's Apply,
+// signs in to (or creates) the site's account with your saved job-site login, confirms the account
+// from the site's email when it asks (mail.js), fills each page, attaches the tailored resume and
+// presses Save and Continue / Next. It stops and tells you (a notification and the app's "Waiting
+// on you" list) at Review, at a question that's yours, a CAPTCHA or any error the page shows.
+// It never presses Submit.
 // Each tab's run lives in chrome.storage.session ("runs"), so it carries on if Chrome restarts
 // the service worker; tick() is called on page loads and every minute.
 
@@ -66,6 +67,7 @@ function say(run, text, kind = "") {
 async function startRun(tabId, { jobId = null, trust = false } = {}) {
   const old = (await allRuns())[tabId];
   const run = { tabId, jobId: jobId || old?.jobId || null, title: old?.title || "", state: "waiting",
+                jobUrl: old?.jobUrl, hosts: old?.hosts || [], accountAt: old?.accountAt,
                 lines: trust ? old?.lines || [] : [], tried: {}, starts: 0, pages: 0, since: Date.now(), progressAt: Date.now() };
   if (trust) await say(run, "Continuing from here.", "muted"); else await saveRun(tabId, run);
   stopping.delete(tabId);
@@ -98,6 +100,15 @@ async function advance(tabId, { trust = false } = {}) {
   }
 }
 
+// Your saved login is typed only on the sites this application's tab went through on its own
+// (the posting, and where its Apply button led), never on a sign-in page of Google, Microsoft,
+// LinkedIn, Amazon.com and the like that a site hands you to.
+const IDENTITY_HOST = /(^|\.)(google\.com|googleapis\.com|microsoftonline\.com|microsoft\.com|live\.com|linkedin\.com|facebook\.com|apple\.com|amazon\.com|github\.com|okta\.com|auth0\.com|indeed\.com|yahoo\.com)$/i;
+const MAIL_WAIT_MS = 10 * 60 * 1000; // how long to keep looking for a site's confirmation email
+const escape = (s) => s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+const loginSite = (run, host) => !IDENTITY_HOST.test(host) && (run.hosts || []).includes(baseDomain(host));
+const allowPattern = (run) => `(^|\\.)(${(run.hosts || []).map(escape).join("|")})$`;
+
 async function drive(tabId, run, trust) {
   run.state = "running";
   await saveRun(tabId, run);
@@ -108,6 +119,7 @@ async function drive(tabId, run, trust) {
     if (run.jobId) q.set("job_id", run.jobId);
     ctx = await api(`/api/x/context?${q}`);
     if (ctx.job) Object.assign(run, { jobId: ctx.job.id, title: `${ctx.job.title} at ${ctx.job.company}` });
+    if (ctx.job?.url && !run.jobUrl) run.jobUrl = ctx.job.url;
     return ctx;
   };
   const moved = () => { run.progressAt = Date.now(); };
@@ -116,13 +128,37 @@ async function drive(tabId, run, trust) {
     run.state = "waiting";
     return saveRun(tabId, run);
   };
+  // The site's confirmation email: {link} / {code}, or {stop} once it has finished the run or
+  // set it to wait for the email.
+  const mail = async (kind, where) => {
+    const login = await Vault.load();
+    const since = run.accountAt || run.since;
+    await say(run, `Looking in ${login?.email || "your email"} for the site's ${kind === "code" ? "code" : "confirmation link"}`, "muted");
+    const r = await fromMail({ email: login?.email, kind, since, hosts: [...(run.hosts || []), new URL((await chrome.tabs.get(tabId)).url).hostname] })
+      .catch((e) => ({ error: e.message }));
+    if (r.link || r.code) return r;
+    const yourself = kind === "code" ? "Type the code from the site's email yourself" : "Open the link in the site's email yourself";
+    if (r.error) return { stop: await finish(run, "needs_you", where, `${yourself}, then click Continue (${r.error}).`) };
+    if (Date.now() - since > MAIL_WAIT_MS) return { stop: await finish(run, "needs_you", where, `The site's email hasn't come in 10 minutes. ${yourself}, then click Continue.`) };
+    return { stop: await waitHere("the site's email didn't come") }; // looks again on the next check
+  };
 
-  for (let i = 0, first = true; i < 40; i++, first = false) {
+  for (let i = 0, first = true; i < 50; i++, first = false) {
     if (stopping.delete(tabId)) return finish(run, "stopped", "", "Stopped. Nothing past this step was touched.");
     const tab = await chrome.tabs.get(tabId);
     const host = new URL(tab.url || "about:blank").hostname;
+    if (/^https?:/.test(tab.url || "") && !IDENTITY_HOST.test(host) && !(run.hosts ||= []).includes(baseDomain(host))) run.hosts.push(baseDomain(host));
     const st = await waitStatus(tabId);
-    if (!known(st)) return waitHere("the application form didn't appear");
+    if (!known(st)) {
+      // After the confirmation link: back to the application, where it signs in.
+      if (run.verified && !run.reopened && run.jobUrl) {
+        run.reopened = true;
+        await chrome.tabs.update(tabId, { url: run.jobUrl });
+        moved();
+        return waitHere("the application didn't open again after confirming your email");
+      }
+      return waitHere("the application form didn't appear");
+    }
     const where = st.step ? `step ${st.step.n} of ${st.step.of} (${st.step.name})` : "";
 
     if (st.closed) {
@@ -132,24 +168,59 @@ async function drive(tabId, run, trust) {
     }
     if (st.captcha) return finish(run, "needs_you", where, "The page shows a CAPTCHA. Solve it yourself, then click Continue.");
     if (st.verifyEmail && !st.account && !st.posting) {
-      run.tried = {}; // after you verify, it signs in again
-      return finish(run, "needs_you", where, "Workday sent a verification email. Open the link in it, then click Continue.");
+      const r = await mail("link", where);
+      if ("stop" in r) return;
+      await say(run, "Opening the confirmation link from the site's email", "ok");
+      await chrome.tabs.update(tabId, { url: r.link });
+      Object.assign(run, { tried: {}, verified: true, reopened: false }); // then it signs in again
+      moved();
+      await pause(4000);
+      continue;
     }
 
     if (st.account) {
-      if (!WORKDAY_HOST.test(host)) return finish(run, "needs_you", where, "Sign in yourself (Job Hunter signs in only on Workday sites), then click Continue.");
+      if (!loginSite(run, host)) return finish(run, "needs_you", where, `This sign-in is on ${host}, not the job's own site; Job Hunter doesn't type your login there. Sign in yourself, then click Continue.`);
       const login = await Vault.load();
       if (!login) return finish(run, "needs_you", where, "Save your job-site login in the Job Hunter settings (or sign in yourself), then click Continue.");
       if (trust && first) run.tried = {};
-      const mode = !run.tried.signin ? "signin" : !run.tried.create ? "create" : null;
+      const workday = WORKDAY_HOST.test(host);
+      let mode = st.account;
+      if (mode === "code") {
+        const r = await mail("code", where);
+        if ("stop" in r) return;
+        if ((run.codes = (run.codes || 0) + 1) > 3) return finish(run, "needs_you", where, "The site kept asking for a code. Type it yourself, then click Continue.");
+        await say(run, "Typing the code from the site's email", "muted");
+        const [c] = await inTab(tabId, "account", { mode, code: r.code, allow: allowPattern(run) }, true).catch(() => []);
+        if (c && !c.done) await say(run, (c.errors || [c.reason]).join("; "), "warn");
+        moved();
+        await pause(3000);
+        continue;
+      }
+      if (mode === "email") {
+        if ((run.emailPages = (run.emailPages || 0) + 1) > 3) return finish(run, "needs_you", where, "The sign-in page didn't move on after your email. Sign in yourself, then click Continue.");
+        await say(run, `Signing in as ${login.email}`, "muted");
+        const [e] = await inTab(tabId, "account", { mode, email: login.email, allow: allowPattern(run) }, true).catch(() => []);
+        if (e && !e.done) await say(run, (e.errors || [e.reason]).join("; "), "warn");
+        moved();
+        await pause(3000);
+        continue;
+      }
+      // Workday shows Create Account first, so it tries Sign In first; other sites show the form that
+      // fits your email (amazon.jobs asks for the email first).
+      mode = mode === "create" && !workday && !run.tried.create ? "create"
+           : !run.tried.signin ? "signin" : !run.tried.create ? "create" : null;
       if (!mode) return finish(run, "needs_you", where, `Couldn't sign in or create an account with your saved login (${run.accountError || "no reason shown"}). Sign in yourself, then click Continue.`);
       run.tried[mode] = true;
       await say(run, mode === "signin" ? `Signing in as ${login.email}` : "No account on this site yet: creating one", "muted");
+      if (mode === "create" && !workday) await fillPage(tabId, await context(tab)).catch(() => {}); // name, phone ...
       const { consentOnCreate = true } = await chrome.storage.local.get("consentOnCreate");
       let r = null;
-      try { [r] = await inTab(tabId, "account", { ...login, mode, consent: consentOnCreate }, true); } catch { /* the page reloaded */ }
-      if (r?.done || !r) { moved(); await say(run, mode === "signin" ? "Signed in" : "Account created", "ok"); }
-      else {
+      try { [r] = await inTab(tabId, "account", { ...login, mode, consent: consentOnCreate, allow: allowPattern(run) }, true); } catch { /* the page reloaded */ }
+      if (r?.done || !r) {
+        moved();
+        if (mode === "create") run.accountAt = Date.now(); // its confirmation email comes after this
+        await say(run, mode === "signin" ? "Signed in" : "Account created", "ok");
+      } else {
         run.accountError = (r.errors || [r.reason]).join("; ");
         await say(run, run.accountError, "warn");
         if (mode === "create" && /already|exist|in use/i.test(run.accountError)) run.tried.create = true;
@@ -158,39 +229,10 @@ async function drive(tabId, run, trust) {
       continue;
     }
 
-    if (st.workday) {
-      if (st.review) {
-        await say(run, "Reached Review. Check every answer and the resume, then submit yourself.", "ok");
-        return finish(run, "review", st.step.name, "Check it and submit");
-      }
-      if (SIGN_IN_STEP.test(st.step.name)) { await pause(2000); continue; } // its form is still drawing
-      if (run.pages >= 8) return finish(run, "needs_you", where, "It went through 8 steps without reaching Review.");
-      const c = await context(tab);
-      await say(run, `Step ${st.step.n} of ${st.step.of}: ${st.step.name}`, "step");
-      const { filled, skipped } = await fillPage(tabId, c);
-      await say(run, `filled ${filled.length}${skipped.length ? `; left ${skipped.length}: ${skipped.slice(0, 4).map((s) => s.slice(0, 50)).join("; ")}` : ""}`, "muted");
-      if (st.needsResume && c.job?.has_resume && await attachResume(tabId, c.job.id)) {
-        for (let k = 0; k < 40 && (await pageStatus(tabId))?.needsResume; k++) await pause(250); // upload finishing
-        await say(run, "attached your tailored resume (open it on Review to check)", "muted");
-      }
-      const yours = skipped.filter((s) => YOURS.test(s));
-      if (yours.length && !(trust && run.pages === 0)) return finish(run, "needs_you", where, `Answer these on the page: ${yours.slice(0, 3).join("; ")}`, yours);
-      if (stopping.delete(tabId)) return finish(run, "stopped", where, "Stopped. Nothing past this step was touched.");
-      const next = await inTab(tabId, "next");
-      if (!next.some((r) => r.moved)) {
-        const errs = (await pageStatus(tabId))?.errors || [];
-        return finish(run, "needs_you", where, errs.length ? `The page didn't move on. It says: ${errs.join("; ")}` : "The page didn't move on.", errs);
-      }
-      run.pages++;
-      trust = false;
-      moved();
-      continue;
-    }
-
     if (st.posting) {
       if (run.starts >= 3) return finish(run, "needs_you", "", "Pressing Apply on the posting didn't open the application.");
       run.starts++;
-      await say(run, "Pressing Apply, then Apply Manually", "muted");
+      await say(run, WORKDAY_HOST.test(host) ? "Pressing Apply, then Apply Manually" : "Pressing Apply", "muted");
       const [r] = await inTab(tabId, "start", null, true).catch(() => []);
       if (r && !r.started) await say(run, r.reason, "warn");
       moved();
@@ -198,28 +240,52 @@ async function drive(tabId, run, trust) {
       continue;
     }
 
+    if (st.workday && SIGN_IN_STEP.test(st.step.name)) { await pause(2000); continue; } // its form is still drawing
+    if (st.workday && st.review) {
+      await say(run, "Reached Review. Check every answer and the resume, then submit yourself.", "ok");
+      return finish(run, "review", st.step.name, "Check it and submit");
+    }
+
     const formPage = FORM_PAGE.find(([re]) => re.test(host));
     const url = new URL(tab.url);
-    if (formPage && !url.pathname.endsWith(formPage[1])) {
+    if (!st.workday && formPage && !url.pathname.endsWith(formPage[1])) {
       await chrome.tabs.update(tabId, { url: url.origin + url.pathname.replace(/\/+$/, "") + formPage[1] });
       moved();
       return waitHere("the application form didn't load");
     }
-    if (WORKDAY_HOST.test(host)) return waitHere("the Workday application didn't open");
-
-    // On a site Job Hunter doesn't step through (e.g. amazon.jobs, which signs in with an Amazon
-    // account), a posting page with a search box isn't an application: leave it for you to start.
-    if (!ONE_PAGE_HOST.test(host) && !st.needsResume && st.form < 8) {
-      return finish(run, "needs_you", "", `Job Hunter doesn't apply on ${host} by itself. Press Apply and sign in yourself; once the application form shows, click Continue and it fills it.`);
+    if (!st.workday && WORKDAY_HOST.test(host)) return waitHere("the Workday application didn't open");
+    // A page with a few boxes (a job search) and no Apply, Next or Submit isn't an application.
+    if (!st.workday && !st.next && !st.review && !ONE_PAGE_HOST.test(host) && !st.needsResume && st.form < 8) {
+      return finish(run, "needs_you", "", `No Apply button or application form on this ${host} page. Open the application yourself, then click Continue and it fills it.`);
     }
-    // A one-page form (Greenhouse, Lever, Ashby, or a site Job Hunter doesn't step through).
+
+    // A step of the application: Workday's, or another site's page with Next / Submit.
+    if (run.pages >= 12) return finish(run, "needs_you", where, "It went through 12 pages without reaching Review.");
     const c = await context(tab);
+    await say(run, st.step ? `Step ${st.step.n} of ${st.step.of}: ${st.step.name}` : `Page ${run.pages + 1}: ${st.title || host}`, "step");
     const { filled, skipped } = await fillPage(tabId, c);
-    const attached = c.job?.has_resume && await attachResume(tabId, c.job.id);
-    await say(run, `filled ${filled.length}${attached ? " and attached your tailored resume" : ""}${skipped.length ? `; left ${skipped.length}: ${skipped.slice(0, 4).map((s) => s.slice(0, 50)).join("; ")}` : ""}`, "muted");
-    return ONE_PAGE_HOST.test(host)
-      ? finish(run, "review", "the form", skipped.length ? `Filled. Answer the ${skipped.length} left, then submit.` : "Filled. Check it and submit.")
-      : finish(run, "needs_you", "the form", "Filled what it could. Job Hunter doesn't step through this site: finish it yourself.");
+    let attached = false;
+    if (st.needsResume && c.job?.has_resume && await attachResume(tabId, c.job.id)) {
+      for (let k = 0; k < 40 && (await pageStatus(tabId))?.needsResume; k++) await pause(250); // upload finishing
+      attached = true;
+    }
+    await say(run, `filled ${filled.length}${attached ? " and attached your tailored resume (open it on Review to check)" : ""}${skipped.length ? `; left ${skipped.length}: ${skipped.slice(0, 4).map((s) => s.slice(0, 50)).join("; ")}` : ""}`, "muted");
+    const yours = skipped.filter((s) => YOURS.test(s));
+    if (st.review || (!st.next && ONE_PAGE_HOST.test(host))) {
+      await say(run, "Reached the last page. Check every answer and the resume, then submit yourself.", "ok");
+      return finish(run, "review", where || "the form", skipped.length ? `Filled. Answer the ${skipped.length} left, then submit.` : "Check it and submit");
+    }
+    if (yours.length && !(trust && run.pages === 0)) return finish(run, "needs_you", where, `Answer these on the page: ${yours.slice(0, 3).join("; ")}`, yours);
+    if (stopping.delete(tabId)) return finish(run, "stopped", where, "Stopped. Nothing past this step was touched.");
+    if (!st.next) return finish(run, "needs_you", where || "the form", "Filled this page, but it has no Next or Continue button Job Hunter can press. Finish it yourself.");
+    const next = await inTab(tabId, "next");
+    if (!next.some((r) => r.moved)) {
+      const errs = (await pageStatus(tabId))?.errors || [];
+      return finish(run, "needs_you", where, errs.length ? `The page didn't move on. It says: ${errs.join("; ")}` : "The page didn't move on.", errs);
+    }
+    run.pages++;
+    trust = false;
+    moved();
   }
   return finish(run, "needs_you", "", "It kept going without reaching Review.");
 }

@@ -6,7 +6,7 @@ const fs = require("node:fs");
 const path = require("node:path");
 const vm = require("node:vm");
 
-const SRC = fs.readFileSync(path.join(__dirname, "..", "autopilot.js"), "utf8");
+const SRC = ["mail.js", "autopilot.js"].map((f) => fs.readFileSync(path.join(__dirname, "..", f), "utf8")).join("\n");
 const LOGIN = { email: "test.user@example.com", password: "Fixture-only-9x!" };
 
 // A Workday application as content.js's API would report it. `steps` are the steps after sign-in.
@@ -42,16 +42,17 @@ function fakePage(steps) {
   return page;
 }
 
-function load(page, { url = "https://comcast.wd5.myworkdayjobs.com/en-US/careers/job/Data-Analyst_R123" } = {}) {
+function load(page, { url = "https://comcast.wd5.myworkdayjobs.com/en-US/careers/job/Data-Analyst_R123", mail = null } = {}) {
   const session = {}, local = { consentOnCreate: true };
-  const out = { notes: [], posts: [], targets: [] };
+  const out = { notes: [], posts: [], targets: [], opened: [], mail: [] };
   const store = (obj) => ({
     get: async (k) => (typeof k === "string" ? { [k]: obj[k] } : { ...obj }),
     set: async (v) => { Object.assign(obj, JSON.parse(JSON.stringify(v))); },
   });
   const chrome = {
     storage: { session: store(session), local: store(local) },
-    tabs: { get: async (id) => ({ id, url, title: "Data Analyst" }), update: async () => ({}) },
+    tabs: { get: async (id) => ({ id, url: page.url || url, title: "Data Analyst" }),
+            update: async (id, { url: to }) => { out.opened.push(to); page.onOpen?.(to); return {}; } },
     notifications: { create: (id, n) => out.notes.push({ id, ...n }) },
     scripting: {
       executeScript: async ({ target, files, func, args }) => {
@@ -76,6 +77,8 @@ function load(page, { url = "https://comcast.wd5.myworkdayjobs.com/en-US/careers
     setTimeout: (f) => setImmediate(f),
   });
   vm.runInContext(SRC, ctx);
+  // The confirmation email, as mail.js would read it from Gmail.
+  ctx.fromMail = async (q) => { out.mail.push(q); return mail ? mail(q) : { none: true }; };
   return { ctx, out, session };
 }
 
@@ -124,10 +127,10 @@ test("no saved login: it asks you to sign in, and never types anything into the 
   assert.match(out.notes.at(-1).message, /job-site login/);
 });
 
-test("the saved login is used only on Workday sites", async () => {
+test("the saved login is never typed on a Google (or other identity) sign-in", async () => {
   const page = fakePage(STEPS);
   page.view = "signin";
-  const { ctx, session } = load(page, { url: "https://careers.example.com/apply" });
+  const { ctx, session } = load(page, { url: "https://accounts.google.com/signin" });
   await ctx.startRun(5, { jobId: 7 });
   assert.equal(session.runs[5].state, "needs_you");
   assert.ok(!page.calls.some((c) => c.startsWith("account")));
@@ -162,4 +165,81 @@ test("on a site it doesn't know, a posting page (a search box, no resume upload)
   assert.equal(session.runs[5].state, "needs_you");
   assert.ok(!page.calls.includes("fill"));
   assert.match(out.notes.at(-1).message, /amazon\.jobs/);
+});
+
+// Another site's application, as content.js reports it: amazon.jobs's email-first sign-in, then
+// pages with Next, then the last page with Submit.
+function otherSite() {
+  const page = { view: "posting", n: 0, calls: [], url: "https://www.amazon.jobs/en/jobs/10589280/data-scientist" };
+  const base = { workday: false, step: null, review: false, next: false, needsResume: false, signIn: false,
+                 account: null, posting: false, closed: "", captcha: false, verifyEmail: false, form: 0, errors: [], title: "" };
+  page.api = {
+    status: () => {
+      if (page.view === "posting") return { ...base, posting: true, form: 2 };
+      if (["email", "signin", "create", "code"].includes(page.view)) return { ...base, signIn: true, account: page.view, form: 2 };
+      if (page.view === "check-email") return { ...base, verifyEmail: true };
+      return { ...base, form: 6, next: page.n < 2, review: page.n === 2, title: `Page ${page.n + 1}` };
+    },
+    start: () => { page.view = "email"; page.url = "https://passport.amazon.jobs/"; return { started: true }; },
+    account: ({ mode, email, password, code, allow }) => {
+      assert.ok(new RegExp(allow).test(new URL(page.url).hostname), `login typed on ${page.url}`);
+      if (mode === "email") { assert.equal(email, LOGIN.email); page.view = page.newUser ? "create" : "signin"; return { done: true }; }
+      if (mode === "code") { assert.equal(code, "482913"); page.view = "app"; page.url = "https://account.amazon.jobs/en-US/applicant/jobs/10589280/apply"; return { done: true }; }
+      assert.equal(password, LOGIN.password);
+      if (mode === "create") { page.view = page.confirm; return { done: true }; }
+      page.view = "app";
+      page.url = "https://account.amazon.jobs/en-US/applicant/jobs/10589280/apply";
+      return { done: true };
+    },
+    fill: () => ({ filled: [{ label: "First name", value: "Sam", from: "profile" }], skipped: [] }),
+    attach: () => ({ attached: true }),
+    next: () => {
+      if (page.n === 2) throw new Error("pressed next on the last page");
+      page.n++;
+      return { moved: true };
+    },
+  };
+  page.onOpen = (to) => { if (/verify/.test(to)) { page.view = "signin"; page.url = "https://passport.amazon.jobs/"; } };
+  return page;
+}
+
+test("amazon.jobs: Apply, the email-first sign-in, then each page with Next up to Submit (never pressed)", async () => {
+  const page = otherSite();
+  const { ctx, out, session } = load(page);
+  await ctx.startRun(5, { jobId: 7 });
+  assert.deepEqual(page.calls.filter((c) => c !== "status"),
+    ["start", "account:email", "account:signin", "fill", "next", "fill", "next", "fill"]);
+  assert.equal(session.runs[5].state, "review");
+  assert.equal(out.notes.at(-1).title, "Ready for you to submit");
+});
+
+test("a new account the site asks to confirm by email: it opens the link from that email, then signs in", async () => {
+  const page = otherSite();
+  Object.assign(page, { newUser: true, confirm: "check-email" });
+  const { ctx, out, session } = load(page, { mail: ({ kind }) => (kind === "link" ? { link: "https://passport.amazon.jobs/verify?t=abc" } : { none: true }) });
+  await ctx.startRun(5, { jobId: 7 });
+  assert.deepEqual(page.calls.filter((c) => c.startsWith("account")), ["account:email", "account:create", "account:signin"]);
+  assert.deepEqual(out.opened, ["https://passport.amazon.jobs/verify?t=abc"]);
+  assert.equal(out.mail[0].email, LOGIN.email);
+  assert.ok(out.mail[0].hosts.includes("amazon.jobs"));
+  assert.equal(session.runs[5].state, "review");
+});
+
+test("a code sent by email is typed into the site's code box", async () => {
+  const page = otherSite();
+  Object.assign(page, { newUser: true, confirm: "code" });
+  const { ctx, session } = load(page, { mail: ({ kind }) => (kind === "code" ? { code: "482913" } : { none: true }) });
+  await ctx.startRun(5, { jobId: 7 });
+  assert.deepEqual(page.calls.filter((c) => c.startsWith("account")), ["account:email", "account:create", "account:code"]);
+  assert.equal(session.runs[5].state, "review");
+});
+
+test("while the confirmation email hasn't come it waits and looks again; it never guesses", async () => {
+  const page = otherSite();
+  Object.assign(page, { newUser: true, confirm: "check-email" });
+  const { ctx, out, session } = load(page);
+  await ctx.startRun(5, { jobId: 7 });
+  assert.equal(session.runs[5].state, "waiting", JSON.stringify(session.runs[5].lines));
+  assert.deepEqual(out.opened, []);
+  assert.equal(out.mail.length, 1);
 });

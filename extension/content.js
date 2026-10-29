@@ -1,13 +1,14 @@
 // Injected into an application page when you use the side panel. It reads the form's questions,
 // fills the empty ones you have answers for, attaches files, and collects what you typed so you
 // can save it. It never submits the form, and never touches fields that look sensitive; the only
-// password it types is your saved job-site login, into a Workday Sign In / Create Account form (account()).
+// password it types is your saved job-site login, into the sign-in / sign-up form of the site the
+// application is on (account(), which checks the site; never a Google or LinkedIn sign-in).
 // Besides plain inputs it handles Workday's widgets: button dropdowns, search-and-pick boxes,
 // Yes/No questions labelled by their field wrapper, and numbered Work Experience / Websites sections.
 // Which answer and option to use comes from matching.js (injected first). Every value is read back
 // after filling: one the page didn't keep is reported as skipped, not filled.
 (() => {
-  const VERSION = 14;
+  const VERSION = 15;
   if (window.__jobHunterApi && window.__jobHunterApi.version >= VERSION) return;
   const M = window.__jobHunterMatch;
   if (!M) throw new Error("Job Hunter: matching.js must be injected before content.js");
@@ -375,10 +376,11 @@
     const a = digits(actual), w = digits(wanted);
     return w.length >= 7 && a.length >= 7 && (a.endsWith(w) || w.endsWith(a)) && !/[a-z]/i.test(String(wanted));
   }
-  // A <select> still on "Select One" is empty even when that option has no value="" of its own.
+  // A <select> still on "Select One" is empty even when that option has no value="" of its own,
+  // and so is a phone box holding only the country code the site typed in ("+1", as on amazon.jobs).
   const hasValue = (el) => el.tagName === "SELECT"
     ? el.selectedIndex >= 0 && !!el.value.trim() && !PLACEHOLDER.test(clean(el.options[el.selectedIndex].text))
-    : !!(el.value || "").trim();
+    : !!(el.value || "").trim() && !/^\+\d{1,3}$/.test(el.value.trim());
 
   // Values for numbered sections, from your master resume and profile. undefined = use the normal rules.
   function sectionValue(sec, el, ctx) {
@@ -596,11 +598,25 @@
     return out;
   }
 
-  // Autopilot: Workday's "Save and Continue" between steps, up to Review. Only the footer's
-  // next button, only with one of these labels; anything that reads like submit is never clicked.
+  // Autopilot: the button between steps, up to Review. On Workday only the footer's next button;
+  // elsewhere a button that says Next / Continue / Save and Continue. Anything that reads like
+  // submit is never clicked.
   const NEXT_IDS = ["pageFooterNextButton", "bottom-navigation-next-button"];
   const NEXT_TEXT = /^(save and continue|next|continue)$/i;
+  const GENERIC_NEXT = /^(next|continue|next step|proceed|save (and|&) (continue|next|proceed))$/i;
   const FINAL = /submit|apply|send|finish|confirm/i;
+  // What a final button says; seeing one (and no Next) means the application is at Review.
+  const SUBMIT_TEXT = /^(submit|submit (my |your |this )?application|send (my )?application|finish|complete( my)? application|apply)$/i;
+  // Sign-in buttons that hand you to another company's account (Google, LinkedIn ...): never pressed.
+  const SSO = /google|linkedin|apple|facebook|microsoft|github|indeed|with amazon|amazon account|sso|single sign/i;
+
+  const BUTTONS = 'button, a, [role=button], input[type="submit"], input[type="button"]';
+  const say = (b) => clean(b.getAttribute("aria-label") || b.innerText || b.value || "");
+  // Matched on what the button shows or its aria-label ("Apply now" / "Apply now for Data Scientist ...").
+  const buttons = (re, root = document) => [...root.querySelectorAll(BUTTONS)]
+    .filter((b) => visible(b) && !b.disabled && b.getAttribute("aria-disabled") !== "true")
+    .filter((b) => { const t = [clean(b.innerText || b.value || ""), say(b)]; return t.some((x) => re.test(x)) && !t.some((x) => SSO.test(x)); })
+    .filter((b) => !b.closest('[id*="cookie" i], [class*="cookie" i], [id*="consent" i], [class*="consent" i], [id*="onetrust" i]'));
 
   // {n: 2, of: 5, name: "My Experience"} from Workday's progress bar, or null on other sites.
   function step() {
@@ -610,24 +626,30 @@
   }
   const atReview = (s) => !!s && (/^review$/i.test(s.name) || s.n === s.of);
   function nextButton() {
-    const b = NEXT_IDS.map((id) => document.querySelector(`[data-automation-id="${id}"]`)).find((x) => x && visible(x));
-    const text = b ? clean(b.innerText) : "";
-    return b && !b.disabled && NEXT_TEXT.test(text) && !FINAL.test(text) ? b : null;
+    if (step()) {
+      const b = NEXT_IDS.map((id) => document.querySelector(`[data-automation-id="${id}"]`)).find((x) => x && visible(x));
+      const text = b ? clean(b.innerText) : "";
+      return b && !b.disabled && NEXT_TEXT.test(text) && !FINAL.test(text) ? b : null;
+    }
+    if (loginForm()) return null;
+    return buttons(GENERIC_NEXT).filter((b) => !FINAL.test(say(b))).pop() || null; // the last one: the form's footer
   }
-  const pageErrors = () => [...document.querySelectorAll('[data-automation-id*="error" i], [role=alert]')]
+  // Another site's application at its last page: a Submit button and no Next.
+  const finalPage = () => !step() && !loginForm() && controls().length > 0 && !nextButton() && buttons(SUBMIT_TEXT).length > 0;
+  const pageErrors = () => [...document.querySelectorAll('[data-automation-id*="error" i], [role=alert], [aria-live=assertive]')]
     .filter(visible).map((e) => clean(e.innerText)).filter(Boolean).slice(0, 6);
   // A resume field with nothing in it yet (Workday lists uploaded files as file-upload-item).
   const needsResume = () => !!document.querySelector('input[type="file"]') &&
     !document.querySelector('[data-automation-id="file-upload-item"]');
 
   const byId = (id) => [...document.querySelectorAll(`[data-automation-id="${id}"]`)].find(visible);
-  const CLICKABLE = '[data-automation-id="click_filter"], button, a, [role=button]';
+  const CLICKABLE = '[data-automation-id="click_filter"], ' + BUTTONS;
   // The nearest control around `el` whose label matches, e.g. the Sign In button of this form
-  // (not the Sign In link in the page header).
+  // (not the Sign In link in the page header). Never a Google / LinkedIn sign-in.
   function near(el, re) {
     for (let box = el?.parentElement; box; box = box.parentElement) {
       const hit = [...box.querySelectorAll(CLICKABLE)].filter(visible)
-        .find((b) => re.test(clean(b.getAttribute("aria-label") || b.innerText)));
+        .find((b) => { const t = say(b); return re.test(t) && !SSO.test(t); });
       if (hit) return hit;
     }
     return null;
@@ -635,17 +657,42 @@
   // Workday lays a transparent click_filter over its buttons; that's what takes the click.
   const pressButton = (b) => press(b.parentElement?.querySelector(':scope > [data-automation-id="click_filter"]') || b);
 
-  // Workday's Sign In / Create Account form: {email, password, verify (Create Account only)}.
+  const LOGIN_PAGE = /\b(log ?in|sign ?in|sign ?up|create (an |your )?account|register|verify|verification)\b/i;
+  const CREATE_TEXT = /^(create( an| my| your)? account|sign up|register|join( now)?)$/i;
+  const SIGNIN_TEXT = /^(sign in|log ?in|continue|next|submit)$/i;
+  const fieldText = (i) => `${labelOf(i)} ${i.name} ${i.id} ${i.autocomplete || ""} ${i.placeholder || ""}`;
+  // A sign-in or sign-up form: {kind, email, password, verify, code}. kind is "signin", "create",
+  // "email" (the email-first page of a two-page sign-in, as on amazon.jobs) or "code" (a code the
+  // site emailed you). Never inside an application step.
   function loginForm() {
-    const pw = [...document.querySelectorAll('input[type="password"]')].filter(visible);
+    if (step()) return null;
+    const shown = (sel) => [...document.querySelectorAll(sel)].filter(visible);
+    const pw = shown('input[type="password"]');
+    const texts = shown('input[type="email"], input[type="text"], input[type="tel"], input:not([type])');
+    const email = byId("email") || texts.find((i) => i.type === "email" || /e-?mail|user ?name|login/i.test(fieldText(i)));
     const password = byId("password") || pw[0];
-    if (!password) return null;
-    const email = byId("email") || [...document.querySelectorAll('input[type="email"], input[type="text"]')]
-      .filter(visible).find((i) => /e-?mail/i.test(labelOf(i) + " " + (i.autocomplete || "")));
-    return { email, password, verify: byId("verifyPassword") || pw[1] || null };
+    if (password) {
+      const verify = byId("verifyPassword") || pw[1] || null;
+      const create = !!verify || (!!near(password, CREATE_TEXT) && !near(password, /^(sign in|log ?in)$/i));
+      return { kind: create ? "create" : "signin", email, password, verify };
+    }
+    const few = controls().length <= 3, words = LOGIN_PAGE.test((document.body?.innerText || "").slice(0, 3000));
+    const code = texts.find((i) => i.autocomplete === "one-time-code" || /\b(code|otp|passcode|pin)\b/i.test(fieldText(i)));
+    if (code && few && words) return { kind: "code", code };
+    if (email && few && words) return { kind: "email", email };
+    return null;
   }
-  // The posting's own Apply button (before the application starts; there is no progress bar yet).
-  const applyButton = () => (step() ? null : byId("adventureButton"));
+  // The posting's own Apply button (before the application starts). On Workday its adventureButton;
+  // elsewhere a button or link that says Apply, on a page that has no application form on it yet.
+  function applyButton() {
+    if (step()) return null;
+    const wd = byId("adventureButton");
+    if (wd) return wd;
+    if (loginForm() || document.querySelector('input[type="file"]')) return null;
+    const fields = controls().filter((c) => !/search|keyword|location|where|what/i.test(fieldText(c)));
+    if (fields.length >= 3) return null;
+    return buttons(/^(apply|apply now|apply here|apply online|apply for this (job|position|role)|apply to this (job|position|role)|start (your |my )?application|begin (your )?application)$/i)[0] || null;
+  }
   const CAPTCHA = 'iframe[src*="recaptcha"], iframe[src*="hcaptcha"], iframe[src*="turnstile"], [data-automation-id*="captcha" i]';
   // A taken-down posting (the app's liveness check uses the same wording), or Workday's missing-page message.
   const CLOSED = new RegExp([
@@ -662,18 +709,23 @@
     const posting = !!applyButton(), form = controls().length;
     // Only on a page with no application on it: no step, sign-in, Apply button or form.
     const closed = !s && !login && !posting && form < 3 ? (text.replace(/’/g, "'").match(CLOSED) || [""])[0] : "";
-    return { workday: !!s, step: s, review: atReview(s), next: !!nextButton(), needsResume: needsResume(),
-             signIn: !!login, account: login ? (login.verify ? "create" : "signin") : null,
+    return { workday: !!s, step: s, review: atReview(s) || (!posting && finalPage()), next: !!nextButton(),
+             needsResume: needsResume(), signIn: !!login, account: login ? login.kind : null,
              posting, closed, captcha: [...document.querySelectorAll(CAPTCHA)].some(visible),
-             verifyEmail: /verify your (email|account)|verification (email|link)|activate your account/i.test(text),
-             form, errors: pageErrors() };
+             verifyEmail: /verify your (email|account)|verification (email|link)|activate your account|confirm your email/i.test(text),
+             form, errors: pageErrors(), title: clean(document.querySelector("h1, h2")?.innerText || document.title).slice(0, 80) };
   }
 
-  // On the posting: press Apply, then "Apply Manually" (Job Hunter fills the form itself, so
-  // Workday's own resume parsing isn't used). Nothing here is a submit button.
+  // On the posting: press Apply, then (Workday) "Apply Manually": Job Hunter fills the form itself,
+  // so Workday's own resume parsing isn't used. Nothing here is a submit button.
   async function start() {
     const apply = applyButton();
-    if (!apply || !/apply/i.test(clean(apply.innerText))) return { started: false, reason: "no Apply button" };
+    if (!apply || !/apply|application/i.test(clean(apply.innerText) + " " + say(apply))) return { started: false, reason: "no Apply button" };
+    // A link that would open a new tab is followed in this one, where the run carries on.
+    if (apply.tagName === "A" && apply.target === "_blank" && /^https?:/.test(apply.href)) {
+      location.assign(apply.href);
+      return { started: true };
+    }
     pressButton(apply);
     for (let i = 0; i < 40; i++) {
       await sleep(250);
@@ -683,32 +735,54 @@
         for (let k = 0; k < 40 && !step() && !loginForm(); k++) await sleep(250); // the next screen drawing
         return { started: true };
       }
-      if (step() || loginForm()) return { started: true };
+      if (step() || loginForm() || !applyButton()) return { started: true };
     }
     return { started: false, reason: "nothing opened after Apply" };
   }
 
-  // Sign in to (mode "signin") or create (mode "create") this Workday site's account with your
-  // saved job-site login, switching the form between the two if needed. `consent` ticks the
-  // Create Account form's terms box. Returns {done} once the form is gone, else the page's errors.
-  async function account({ email, password, mode, consent }) {
+  // Sign in to (mode "signin") or create (mode "create") this site's account with your saved
+  // job-site login, switching the form between the two if needed; or type the email on an
+  // email-first page (mode "email"), or the code the site emailed (mode "code"). `consent` ticks
+  // the sign-up form's terms box. Only on a site the run allows (`allow`, a host pattern).
+  // Returns {done} once the form is gone or has changed, else the page's errors.
+  async function account({ email, password, mode, consent, code, allow }) {
+    if (!allow || !new RegExp(allow, "i").test(location.hostname)) return { done: false, reason: `not typing your login on ${location.hostname}` };
     let f = loginForm();
     if (!f) return { done: false, reason: "no sign-in form" };
+    const settle = async (was) => {
+      for (let i = 0; i < 80; i++) {
+        await sleep(250);
+        const now = loginForm();
+        if (!now || now.kind !== was) return { done: true };
+        const errors = pageErrors();
+        if (errors.length && i > 4) return { done: false, errors };
+      }
+      return { done: false, reason: "the form stayed" };
+    };
+    if (mode === "email" || mode === "code") {
+      if (f.kind !== mode) return { done: false, reason: `this isn't the ${mode} page` };
+      const field = mode === "email" ? f.email : f.code;
+      setValue(field, mode === "email" ? email : code);
+      const go = near(field, /^(continue|next|sign in|log ?in|submit|verify|confirm)$/i);
+      if (!go) return { done: false, reason: "no Continue button on the form" };
+      pressButton(go);
+      return settle(mode);
+    }
     const create = mode === "create";
-    if (!!f.verify !== create) {
-      const link = create ? byId("createAccountLink") || near(f.password, /^create account$/i)
-                          : byId("signInLink") || near(f.password, /^(already have an account\? )?sign in$/i);
+    if ((f.kind === "create") !== create) {
+      const link = create ? byId("createAccountLink") || near(f.password, /^(create (an |your )?account|sign up|register|new user.*)$/i)
+                          : byId("signInLink") || near(f.password, /^(already have an account\?? ?)?(sign in|log ?in)$/i);
       if (!link) return { done: false, reason: `no ${create ? "Create Account" : "Sign In"} link` };
       pressButton(link);
-      for (let i = 0; i < 40 && !!loginForm()?.verify !== create; i++) await sleep(250);
+      for (let i = 0; i < 40 && (loginForm()?.kind === "create") !== create; i++) await sleep(250);
       f = loginForm();
-      if (!f || !!f.verify !== create) return { done: false, reason: "the form didn't switch" };
+      if (!f || (f.kind === "create") !== create) return { done: false, reason: "the form didn't switch" };
     }
-    if (!f.email) return { done: false, reason: "no email field" };
-    setValue(f.email, email);
+    if (f.email) setValue(f.email, email);
+    else if (!create && !f.password) return { done: false, reason: "no email field" };
     setValue(f.password, password);
     if (create) {
-      setValue(f.verify, password);
+      if (f.verify) setValue(f.verify, password);
       const box = byId("createAccountCheckbox") || [...document.querySelectorAll('input[type="checkbox"]')]
         .filter(visible).find((c) => /agree|consent|terms|privacy|acknowledge/i.test(labelOf(c)));
       if (box && !box.checked) {
@@ -716,31 +790,33 @@
         box.click();
       }
     }
-    const submit = create ? byId("createAccountSubmitButton") || near(f.password, /^create account$/i)
-                          : byId("signInSubmitButton") || near(f.password, /^sign in$/i);
+    const submit = create ? byId("createAccountSubmitButton") || near(f.password, /^(create( an| my| your)? account|sign up|register|continue|next|submit)$/i)
+                          : byId("signInSubmitButton") || near(f.password, SIGNIN_TEXT);
     if (!submit) return { done: false, reason: "no submit button on the form" };
     pressButton(submit);
-    for (let i = 0; i < 80; i++) {
-      await sleep(250);
-      if (!loginForm()) return { done: true };
-      const errors = pageErrors();
-      if (errors.length && i > 4) return { done: false, errors };
-    }
-    return { done: false, reason: "the form stayed" };
+    return settle(f.kind);
   }
 
-  // Press "Save and Continue" once and wait for the next step. Re-checks the button right before
-  // the click; reports the page's errors if it stayed put.
+  // Press the step's Next / Save and Continue once and wait for the next step. Re-checks the
+  // button right before the click; reports the page's errors if it stayed put.
   async function next() {
     const s = step();
-    if (!s || atReview(s)) return { moved: false, reason: s ? "review" : "not a Workday application" };
+    if (s && atReview(s)) return { moved: false, reason: "review" };
+    if (!s && finalPage()) return { moved: false, reason: "review" };
     const b = nextButton();
-    if (!b) return { moved: false, reason: "no Save and Continue button" };
+    if (!b) return { moved: false, reason: "no Next or Save and Continue button" };
+    const page = () => `${location.href}|${status().title}|${controls().map((c) => c.name || c.id).join(",")}`;
+    const before = page();
     b.click();
     for (let i = 0; i < 80; i++) {
       await sleep(250);
-      const now = step();
-      if (now && now.n !== s.n) { await sleep(1500); return { moved: true, step: now }; } // let the step render
+      if (s) {
+        const now = step();
+        if (now && now.n !== s.n) { await sleep(1500); return { moved: true, step: now }; } // let the step render
+      } else if (page() !== before) {
+        await sleep(1500);
+        return { moved: true };
+      }
       const errors = pageErrors();
       if (errors.length && i > 4) return { moved: false, errors };
     }
