@@ -8,7 +8,7 @@
 // Which answer and option to use comes from matching.js (injected first). Every value is read back
 // after filling: one the page didn't keep is reported as skipped, not filled.
 (() => {
-  const VERSION = 18;
+  const VERSION = 19;
   if (window.__jobHunterApi && window.__jobHunterApi.version >= VERSION) return;
   const M = window.__jobHunterMatch;
   if (!M) throw new Error("Job Hunter: matching.js must be injected before content.js");
@@ -207,7 +207,7 @@
     const before = new Set(optionEls());
     press(btn);
     const r = pickAny(await waitForOptions(2000, before), values, label);
-    if (r.option) { press(r.option.el); await sleep(300); return { text: r.option.text }; }
+    if (r.option) { press(r.option.el); await sleep(300); return { text: r.option.text, value: r.value }; }
     key(document.activeElement || btn, "Escape");
     return r;
   }
@@ -494,8 +494,13 @@
         const ans = answer(label);
         const d = ans.status === "none" ? M.derived(label, ctx) : null;
         if (ans.status !== "matched" && !d) { if (label) skipped.push(why(label, ans.status)); continue; }
-        const r = d ? await chooseFromButtonAny(el, d.values, label) : await chooseFromButton(el, ans.value, label);
-        if (r.text) note(label, r.text, d ? d.from : ans.from, () => kept(live(el).innerText, r.text));
+        // A saved answer first; if no option matches it (an answer saved on another company's form,
+        // "Comcast Job Alert", in Chewy's list), the derived candidates ("Chewy Career Site").
+        const alt = d ? null : M.derived(label, ctx);
+        const r = d ? await chooseFromButtonAny(el, d.values, label)
+          : alt ? await chooseFromButtonAny(el, [ans.value, ...alt.values], label) : await chooseFromButton(el, ans.value, label);
+        const from = d ? d.from : alt && r.value && r.value !== ans.value ? alt.from : ans.from;
+        if (r.text) note(label, r.text, from, () => kept(live(el).innerText, r.text));
         else skipped.push(why(label, r.reason, d ? d.values[0] : ans.value));
         continue;
       }
