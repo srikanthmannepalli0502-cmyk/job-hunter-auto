@@ -39,7 +39,10 @@ async function pageStatus(tabId) {
              [...all].sort((a, b) => b.form - a.form)[0];
   return st ? { ...st, captcha: all.some((s) => s.captcha) } : null;
 }
-const known = (st) => st && (st.workday || st.account || st.posting || st.closed || st.captcha || st.verifyEmail || st.form > 0);
+// A page the run can act on. A page of only buttons counts when one is Next / Skip & continue
+// (amazon.jobs's SMS updates) or Submit.
+const known = (st) => st && (st.workday || st.account || st.posting || st.closed || st.captcha || st.verifyEmail ||
+                             st.form > 0 || st.next || st.review);
 async function waitStatus(tabId, tries = 8) {
   let st = null;
   for (let i = 0; i < tries && !known(st); i++) {
@@ -127,6 +130,7 @@ async function drive(tabId, run, trust) {
   const waitHere = async (why) => {
     if (Date.now() - run.progressAt > GIVE_UP_MS) return finish(run, "needs_you", "", `Waited 15 minutes: ${why}. Take it from here.`);
     run.state = "waiting";
+    if (run.waitingFor !== why) { run.waitingFor = why; return say(run, `Waiting: ${why} (it looks again each minute).`, "muted"); }
     return saveRun(tabId, run);
   };
   // The site's confirmation email: {link} / {code}, or {stop} once it has finished the run or

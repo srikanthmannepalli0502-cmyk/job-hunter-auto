@@ -258,3 +258,16 @@ test("a Workday step that draws its fields and Next a moment after its title is 
   assert.equal(session.runs[5].state, "review");
   assert.deepEqual(page.calls.filter((c) => c !== "status"), ["fill", "next", "fill", "attach", "next"]);
 });
+
+test("a page of only buttons with Skip & continue is a step: it presses it and goes on", async () => {
+  const page = otherSite();
+  const status = page.api.status;
+  page.api.status = () => {
+    const s = status();
+    return page.view === "app" && page.n === 0 ? { ...s, form: 0, fields: 0 } : s; // amazon.jobs's SMS page
+  };
+  const { ctx, session } = load(page);
+  await ctx.startRun(5, { jobId: 7 });
+  assert.equal(session.runs[5].state, "review");
+  assert.ok(page.calls.includes("next"));
+});
