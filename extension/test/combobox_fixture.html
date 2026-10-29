@@ -20,6 +20,8 @@
       </div>
     </div>
   </div>
+  <!-- Like Workday's text boxes: the form keeps a value only when focus leaves the box. -->
+  <div class="question"><label for="city">City</label><input id="city" type="text"></div>
   <div class="question-form" id="resume" style="display:none">
     <div class="document-upload"><div class="card"><input id="document-replace-input" class="file-upload" type="file">Replace</div></div>
   </div>
@@ -29,6 +31,8 @@
   // Opens on a click (mousedown, as many libraries listen for), closes on choosing.
   const box = document.getElementById("heard"), list = document.getElementById("heard-list");
   box.addEventListener("mousedown", () => { list.hidden = false; box.setAttribute("aria-expanded", "true"); });
+  window.kept = {};
+  document.getElementById("city").addEventListener("focusout", (e) => { window.kept.city = e.target.value; });
   list.addEventListener("click", (e) => {
     const li = e.target.closest('[role="option"]');
     if (!li) return;
@@ -43,13 +47,14 @@
 if (location.search.includes("run")) {
   const api = window.__jobHunterApi, out = {};
   const ctx = { job: { id: 7, company: "Amazon.com Services LLC", found_via: { kind: "company_site", name: "Amazon" } },
-                fields: [], answers: [{ question: "How did you hear about us?", answer: "Comcast Job Alert" }],
+                fields: [{ key: "city", label: "City", keywords: ["city"], exclude: [], value: "Syracuse" }], answers: [{ question: "How did you hear about us?", answer: "Comcast Job Alert" }],
                 history: {}, sensitive: "social security|passport" };
   (async () => {
     out.before = api.status();
     out.questions = api.questions().questions;
     out.fill = await api.fill(ctx);
     out.chosen = box.textContent;
+    out.kept = window.kept;
   })().then(
     () => { document.getElementById("result").textContent = JSON.stringify(out); },
     (e) => { document.getElementById("result").textContent = JSON.stringify({ error: String(e) }); });

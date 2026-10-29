@@ -8,7 +8,7 @@
 // Which answer and option to use comes from matching.js (injected first). Every value is read back
 // after filling: one the page didn't keep is reported as skipped, not filled.
 (() => {
-  const VERSION = 20;
+  const VERSION = 21;
   if (window.__jobHunterApi && window.__jobHunterApi.version >= VERSION) return;
   const M = window.__jobHunterMatch;
   if (!M) throw new Error("Job Hunter: matching.js must be injected before content.js");
@@ -127,12 +127,27 @@
     return out;
   }
 
+  // Typed as a person would: focus the box, insert the text (the browser's own input events, which
+  // Workday's date sections and text areas listen for), then leave it, which is when Workday keeps
+  // a value. Falls back to setting it directly where inserting doesn't take.
   function setValue(el, value) {
     const proto = el.tagName === "TEXTAREA" ? HTMLTextAreaElement.prototype : HTMLInputElement.prototype;
-    Object.getOwnPropertyDescriptor(proto, "value").set.call(el, value); // works with React-controlled inputs
-    el.dispatchEvent(new Event("input", { bubbles: true }));
+    const set = Object.getOwnPropertyDescriptor(proto, "value").set;
+    el.dispatchEvent(new FocusEvent("focusin", { bubbles: true }));
+    el.focus();
+    let typed = false;
+    try {
+      if (el.value) { el.select(); }
+      typed = document.activeElement === el && document.execCommand("insertText", false, value) && el.value === value;
+    } catch { typed = false; }
+    if (!typed) {
+      set.call(el, value); // works with React-controlled inputs
+      el.dispatchEvent(new Event("input", { bubbles: true }));
+    }
     el.dispatchEvent(new Event("change", { bubbles: true }));
-    el.dispatchEvent(new Event("blur", { bubbles: true }));
+    el.dispatchEvent(new FocusEvent("blur"));
+    el.dispatchEvent(new FocusEvent("focusout", { bubbles: true }));
+    el.blur();
   }
   // Workday's search boxes search only on a full Enter (keydown, keypress, keyup).
   function key(el, k) {
@@ -420,6 +435,7 @@
       if (!job) return null;
       if (name === "jobTitle") return job.title;
       if (name === "companyName") return job.company;
+      if (name === "location") return job.location || null; // from the master resume's header
       if (name === "roleDescription") return job.description;
       if (name === "currentlyWorkHere") return job.current ? "check" : null;
       const date = name === "startDate" ? job.start : name === "endDate" ? job.end : "";

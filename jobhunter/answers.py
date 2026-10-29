@@ -83,7 +83,8 @@ def found_via(source: str, company: str) -> dict:
 
 def work_history(resume_text: str) -> dict:
     """Jobs and education from the master resume, for forms with repeated 'Work Experience' and
-    'Education' sections: [{title, company, start: 'MM/YYYY', end, current, description}]."""
+    'Education' sections: [{title, company, location, start: 'MM/YYYY', end, current, description}].
+    The header is 'Company | Title  Dates', or 'Company | Title | Location  Dates'."""
     from jobhunter.resume.compose import Master
 
     months = {m: i for i, m in enumerate(
@@ -99,10 +100,12 @@ def work_history(resume_text: str) -> dict:
             r"(.+?)\s*\|\s*(.+?)\s+((?:[A-Z][a-z]{2}\s+\d{4}).*)$", e.header)
         if not m:
             continue
-        company, title, dates = m.group(1).strip(), m.group(2).strip(), m.group(3)
+        company, dates = m.group(1).strip(), m.group(3)
+        title, _, location = (x.strip() for x in m.group(2).partition("|"))
         start, _, end = dates.partition("-")
         current = "present" in end.lower()
-        jobs.append({"title": title, "company": company.replace(", TCS", "").strip(), "start": mm_yyyy(start),
+        jobs.append({"title": title, "company": company.replace(", TCS", "").strip(), "location": location,
+                     "start": mm_yyyy(start),
                      "end": "" if current else mm_yyyy(end), "current": current,
                      "description": "\n".join(f"- {b}" for b in e.bullets)})
     return {"jobs": jobs, "education": education(resume_text)}

@@ -236,6 +236,16 @@
       if (/data science|analytics/i.test(major)) values.push("Data Science", "Information Systems", "Information Science");
       return { values: [...new Set(values)], from: "your degree (closest option)" };
     }
+    // A degree list without "Master's Degree": the other names lists use for the same level.
+    if (/^(degree|highest degree|degree type|level of education|education level|highest (level of )?education)\b/.test(l)) {
+      const degree = (ctx.fields || []).find((f) => f.key === "degree")?.value || ctx.history?.education?.[0]?.degree || "";
+      const values = /master/i.test(degree)
+        ? [degree, "Master's Degree", "Masters Degree", "Master's", "Masters", "Master", "Master of Science", "MS", "M.S.", "Graduate Degree"]
+        : /bachelor/i.test(degree)
+          ? [degree, "Bachelor's Degree", "Bachelors Degree", "Bachelor's", "Bachelors", "Bachelor", "Bachelor of Science", "BS", "B.S."]
+          : [];
+      return values.length ? { values: [...new Set(values)], from: "your degree (closest option)" } : null;
+    }
     if (/\bphone (device )?type\b|\btype of phone\b/.test(l)) {
       return { values: ["Mobile", "Cell", "Cell Phone", "Mobile Phone"], from: "your phone (mobile)" };
     }
