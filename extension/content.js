@@ -8,7 +8,7 @@
 // Which answer and option to use comes from matching.js (injected first). Every value is read back
 // after filling: one the page didn't keep is reported as skipped, not filled.
 (() => {
-  const VERSION = 17;
+  const VERSION = 18;
   if (window.__jobHunterApi && window.__jobHunterApi.version >= VERSION) return;
   const M = window.__jobHunterMatch;
   if (!M) throw new Error("Job Hunter: matching.js must be injected before content.js");
@@ -610,7 +610,8 @@
   // submit is never clicked.
   const NEXT_IDS = ["pageFooterNextButton", "bottom-navigation-next-button"];
   const NEXT_TEXT = /^(save and continue|next|continue)$/i;
-  const GENERIC_NEXT = /^(next|continue|next step|proceed|save (and|&) (continue|next|proceed))$/i;
+  // "Skip & continue" moves past an optional page (amazon.jobs's SMS updates) without signing up to anything.
+  const GENERIC_NEXT = /^(next|continue|next step|proceed|save (and|&) (continue|next|proceed)|skip (and|&) continue)$/i;
   const FINAL = /submit|apply|send|finish|confirm/i;
   // What a final button says; seeing one (and no Next) means the application is at Review.
   const SUBMIT_TEXT = /^(submit|submit (my |your |this )?application|send (my )?application|finish|complete( my)? application|apply)$/i;
