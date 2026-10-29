@@ -8,7 +8,7 @@
 // Which answer and option to use comes from matching.js (injected first). Every value is read back
 // after filling: one the page didn't keep is reported as skipped, not filled.
 (() => {
-  const VERSION = 21;
+  const VERSION = 22;
   if (window.__jobHunterApi && window.__jobHunterApi.version >= VERSION) return;
   const M = window.__jobHunterMatch;
   if (!M) throw new Error("Job Hunter: matching.js must be injected before content.js");
@@ -162,7 +162,16 @@
     Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, "value").set.call(el, text);
     el.dispatchEvent(new InputEvent("input", { bubbles: true, inputType: text ? "insertText" : "deleteContentBackward", data: text || null }));
   }
+  // A button that is a link to "javascript:..." (amazon.jobs's Continue): the page's own click
+  // handlers run as usual; only the link's default action, which Chrome blocks for an extension
+  // (a Content Security Policy error), is cancelled afterwards.
+  function quietLink(el) {
+    const a = el.closest?.('a[href^="javascript:" i]');
+    if (!a) return;
+    window.addEventListener("click", (e) => { if (a.contains(e.target)) e.preventDefault(); }, { once: true });
+  }
   function press(el) {
+    quietLink(el);
     for (const t of ["pointerdown", "mousedown", "pointerup", "mouseup", "click"]) {
       el.dispatchEvent(new MouseEvent(t, { bubbles: true, cancelable: true, view: window }));
     }
@@ -866,6 +875,7 @@
     if (!b) return { moved: false, reason: "no Next or Save and Continue button" };
     const page = () => `${location.href}|${status().title}|${controls().map((c) => c.name || c.id).join(",")}`;
     const before = page();
+    quietLink(b);
     b.click();
     for (let i = 0; i < 80; i++) {
       await sleep(250);
