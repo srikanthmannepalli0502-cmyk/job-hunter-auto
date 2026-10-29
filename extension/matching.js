@@ -211,6 +211,15 @@
     if (!label || topic(label)) return null;
     const job = ctx.job || {};
     const l = norm(generalize(label, job.company));
+    // The follow-up to "How did you hear": which careers site (amazon.jobs: 'If "Amazon Career Site"
+    // please specify' -> Amazon.jobs). The site the posting is on, by its address.
+    if (/\b(please specify|specify which|which (career |careers )?(site|website))\b/.test(l) &&
+        /\b(career|careers|site|website|web site)\b/.test(l) && job.found_via?.kind === "company_site" && job.url) {
+      let host = "";
+      try { host = new URL(job.url).hostname.replace(/^www\./, ""); } catch { /* no address */ }
+      const site = host.split(".").slice(-2).join(".");
+      return host ? { values: [...new Set([host, site])], from: "the site the job is posted on" } : null;
+    }
     if (HEARD.test(l) || questionKey(label) === questionKey("How did you hear about us?")) {
       const via = job.found_via || {};
       const names = companyNames(job.company);  // "Comcast Cable Communications", "Comcast"
