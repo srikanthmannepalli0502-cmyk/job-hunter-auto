@@ -8,7 +8,7 @@
 // Which answer and option to use comes from matching.js (injected first). Every value is read back
 // after filling: one the page didn't keep is reported as skipped, not filled.
 (() => {
-  const VERSION = 22;
+  const VERSION = 23;
   if (window.__jobHunterApi && window.__jobHunterApi.version >= VERSION) return;
   const M = window.__jobHunterMatch;
   if (!M) throw new Error("Job Hunter: matching.js must be injected before content.js");
@@ -51,10 +51,14 @@
       const own = ff.querySelector("label, legend");
       if (own && clean(own.innerText)) return clean(own.innerText);
     }
-    // A dropdown's own question (amazon.jobs: the question block's label), not its options' text.
+    // A dropdown's own question, not its options' text: the nearest label or legend just before it
+    // (amazon.jobs keeps the label in a block beside the dropdown's).
     if (isCombo(el)) {
-      const own = el.closest('[class*="question"], fieldset, .form-group, .field')?.querySelector("label, legend");
-      if (own && clean(own.innerText)) return clean(own.innerText);
+      for (let a = el.parentElement, i = 0; a && i < 6; a = a.parentElement, i++) {
+        const before = [...a.querySelectorAll("label, legend")].filter((l) => !l.closest('[role="listbox"]') &&
+          clean(l.innerText) && (l.compareDocumentPosition(el) & Node.DOCUMENT_POSITION_FOLLOWING));
+        if (before.length) return clean(before.pop().innerText);
+      }
     }
     const parts = [];
     // Not the option list some dropdowns name themselves by.
