@@ -1,0 +1,57 @@
+<!doctype html>
+<meta charset="utf-8">
+<title>Combobox fixture</title>
+<!-- Shaped like amazon.jobs's General questions step: an ARIA combobox (named by its own option
+     list) under the question's label, and the Resume step's hidden Replace input. -->
+<div class="question-forms">
+  <div class="question-form" id="general">
+    <h2>General questions</h2>
+    <div class="question">
+      <div class="question question-text"><div class="question-label required">
+        <label id="HEARD-label">How did you hear about this role?</label></div></div>
+      <div class="select-wrap">
+        <div id="heard" role="combobox" tabindex="0" aria-haspopup="listbox" aria-expanded="false"
+             aria-labelledby="heard-list" aria-controls="heard-list">Select an option</div>
+        <ul id="heard-list" role="listbox" hidden>
+          <li role="option">Advertisement</li><li role="option">Amazon Career Site</li>
+          <li role="option">At School/On Campus</li><li role="option">Events</li>
+          <li role="option">From a Person</li><li role="option">Other</li>
+        </ul>
+      </div>
+    </div>
+  </div>
+  <div class="question-form" id="resume" style="display:none">
+    <div class="document-upload"><div class="card"><input id="document-replace-input" class="file-upload" type="file">Replace</div></div>
+  </div>
+</div>
+<pre id="result"></pre>
+<script>
+  // Opens on a click (mousedown, as many libraries listen for), closes on choosing.
+  const box = document.getElementById("heard"), list = document.getElementById("heard-list");
+  box.addEventListener("mousedown", () => { list.hidden = false; box.setAttribute("aria-expanded", "true"); });
+  list.addEventListener("click", (e) => {
+    const li = e.target.closest('[role="option"]');
+    if (!li) return;
+    box.textContent = li.textContent;
+    list.hidden = true;
+    box.setAttribute("aria-expanded", "false");
+  });
+</script>
+<script src="../matching.js"></script>
+<script src="../content.js"></script>
+<script>
+if (location.search.includes("run")) {
+  const api = window.__jobHunterApi, out = {};
+  const ctx = { job: { id: 7, company: "Amazon.com Services LLC", found_via: { kind: "company_site", name: "Amazon" } },
+                fields: [], answers: [{ question: "How did you hear about us?", answer: "Comcast Job Alert" }],
+                history: {}, sensitive: "social security|passport" };
+  (async () => {
+    out.before = api.status();
+    out.questions = api.questions().questions;
+    out.fill = await api.fill(ctx);
+    out.chosen = box.textContent;
+  })().then(
+    () => { document.getElementById("result").textContent = JSON.stringify(out); },
+    (e) => { document.getElementById("result").textContent = JSON.stringify({ error: String(e) }); });
+}
+</script>

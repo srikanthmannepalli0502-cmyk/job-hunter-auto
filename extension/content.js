@@ -8,7 +8,7 @@
 // Which answer and option to use comes from matching.js (injected first). Every value is read back
 // after filling: one the page didn't keep is reported as skipped, not filled.
 (() => {
-  const VERSION = 19;
+  const VERSION = 20;
   if (window.__jobHunterApi && window.__jobHunterApi.version >= VERSION) return;
   const M = window.__jobHunterMatch;
   if (!M) throw new Error("Job Hunter: matching.js must be injected before content.js");
@@ -24,7 +24,7 @@
   }, ms));
   const clean = (s) => (s || "").replace(/\s+/g, " ").replace(/\*/g, "").trim().slice(0, 300);
   const SKIP_TYPES = new Set(["hidden", "submit", "button", "reset", "image", "password", "search"]);
-  const PLACEHOLDER = /^(select one|select|choose|choose one|--|none selected)?$/i;
+  const PLACEHOLDER = /^(select one|select|choose|choose one|--|none selected|(please )?(select|choose) (an? )?(option|answer|one|value)( from the list)?)?$/i;
 
   function textOf(id) {
     const el = id && document.getElementById(id);
@@ -51,8 +51,15 @@
       const own = ff.querySelector("label, legend");
       if (own && clean(own.innerText)) return clean(own.innerText);
     }
+    // A dropdown's own question (amazon.jobs: the question block's label), not its options' text.
+    if (isCombo(el)) {
+      const own = el.closest('[class*="question"], fieldset, .form-group, .field')?.querySelector("label, legend");
+      if (own && clean(own.innerText)) return clean(own.innerText);
+    }
     const parts = [];
-    if (el.getAttribute("aria-labelledby")) parts.push(...el.getAttribute("aria-labelledby").split(/\s+/).map(textOf));
+    // Not the option list some dropdowns name themselves by.
+    const naming = (id) => { const t = id && document.getElementById(id); return t && (t.matches('[role="listbox"]') || t.querySelector('[role="option"]')) ? "" : textOf(id); };
+    if (el.getAttribute("aria-labelledby")) parts.push(...el.getAttribute("aria-labelledby").split(/\s+/).map(naming));
     if (el.getAttribute("aria-label")) parts.push(el.getAttribute("aria-label"));
     if (el.id) {
       const lab = document.querySelector(`label[for="${CSS.escape(el.id)}"]`);
@@ -85,7 +92,11 @@
   const optionText = (radio) => clean((radio.id && document.querySelector(`label[for="${CSS.escape(radio.id)}"]`)?.innerText)
     || radio.closest("label")?.innerText || radio.value);
 
-  const isListButton = (el) => el.tagName === "BUTTON" && el.getAttribute("aria-haspopup") === "listbox";
+  // A dropdown that isn't a <select>: Workday's list button, or another site's ARIA combobox (amazon.jobs).
+  const isCombo = (el) => !formField(el) && el.tagName !== "SELECT" &&
+    (el.getAttribute("role") === "combobox" || el.getAttribute("aria-haspopup") === "listbox");
+  const isListButton = (el) => (el.tagName === "BUTTON" && el.getAttribute("aria-haspopup") === "listbox") || isCombo(el);
+  const shownText = (el) => clean(el.tagName === "INPUT" ? el.value : el.innerText);
   function isPrompt(el) {
     if (el.tagName !== "INPUT") return false;
     return el.getAttribute("data-uxi-widget-type") === "selectinput" || el.getAttribute("role") === "combobox"
@@ -96,8 +107,9 @@
   const hasSelection = (el) => selectedItems(el).length > 0;
 
   function controls() {
-    return [...document.querySelectorAll("input, textarea, select, button[aria-haspopup='listbox']")].filter(
+    return [...document.querySelectorAll("input, textarea, select, button[aria-haspopup='listbox'], [role='combobox']")].filter(
       (el) => (isListButton(el) || !SKIP_TYPES.has((el.type || "").toLowerCase())) && !el.disabled && visible(el)
+        && !(el.tagName === "INPUT" && el.parentElement?.closest('[role="combobox"]')) // one combobox, not its inner box
     );
   }
 
@@ -165,10 +177,21 @@
   }
 
   // Workday button dropdown: open it, click the matching option.
-  async function chooseFromButton(btn, answer, label) {
+  // Open a dropdown and read its options: a click, or for a combobox that opens from the keyboard,
+  // the down arrow.
+  async function openDropdown(btn) {
     const before = new Set(optionEls());
     press(btn);
-    const r = pickOption(await waitForOptions(2000, before), answer, label);
+    let opts = await waitForOptions(isCombo(btn) ? 1200 : 2000, before);
+    if (!opts.length && isCombo(btn)) {
+      btn.focus();
+      btn.dispatchEvent(new KeyboardEvent("keydown", { key: "ArrowDown", code: "ArrowDown", keyCode: 40, which: 40, bubbles: true, cancelable: true }));
+      opts = await waitForOptions(1500, before);
+    }
+    return opts;
+  }
+  async function chooseFromButton(btn, answer, label) {
+    const r = pickOption(await openDropdown(btn), answer, label);
     if (r.option) { press(r.option.el); await sleep(300); return { text: r.option.text }; }
     key(document.activeElement || btn, "Escape");
     return r;
@@ -204,9 +227,7 @@
   }
 
   async function chooseFromButtonAny(btn, values, label) {
-    const before = new Set(optionEls());
-    press(btn);
-    const r = pickAny(await waitForOptions(2000, before), values, label);
+    const r = pickAny(await openDropdown(btn), values, label);
     if (r.option) { press(r.option.el); await sleep(300); return { text: r.option.text, value: r.value }; }
     key(document.activeElement || btn, "Escape");
     return r;
@@ -490,7 +511,7 @@
       if (type === "checkbox") continue; // consent and preference boxes are yours to tick
 
       if (isListButton(el)) {
-        if (!PLACEHOLDER.test(clean(el.innerText))) continue; // already chosen
+        if (!PLACEHOLDER.test(shownText(el))) continue; // already chosen
         const ans = answer(label);
         const d = ans.status === "none" ? M.derived(label, ctx) : null;
         if (ans.status !== "matched" && !d) { if (label) skipped.push(why(label, ans.status)); continue; }
@@ -500,7 +521,7 @@
         const r = d ? await chooseFromButtonAny(el, d.values, label)
           : alt ? await chooseFromButtonAny(el, [ans.value, ...alt.values], label) : await chooseFromButton(el, ans.value, label);
         const from = d ? d.from : alt && r.value && r.value !== ans.value ? alt.from : ans.from;
-        if (r.text) note(label, r.text, from, () => kept(live(el).innerText, r.text));
+        if (r.text) note(label, r.text, from, () => kept(shownText(live(el)), r.text));
         else skipped.push(why(label, r.reason, d ? d.values[0] : ans.value));
         continue;
       }
@@ -561,7 +582,9 @@
   function attach(base64, filename, mime, which) {
     const bytes = Uint8Array.from(atob(base64), (c) => c.charCodeAt(0));
     const file = new File([bytes], filename, { type: mime });
-    const inputs = [...document.querySelectorAll('input[type="file"]')];
+    const all = [...document.querySelectorAll('input[type="file"]')];
+    const shown = all.filter(shownBox);
+    const inputs = shown.length ? shown : all; // this page's box, not another step's hidden one
     const want = which === "cover" ? /cover/i : /resume|cv|curriculum/i;
     const target = inputs.find((i) => want.test(labelOf(i) + " " + (i.name || "") + " " + (i.id || ""))) ||
                    (which === "resume" ? inputs[0] : null);
@@ -591,7 +614,7 @@
         value = optionText(el);
       } else if (isListButton(el)) {
         label = labelOf(el);
-        value = PLACEHOLDER.test(clean(el.innerText)) ? "" : clean(el.innerText);
+        value = PLACEHOLDER.test(shownText(el)) ? "" : shownText(el);
       } else if (el.tagName === "SELECT") {
         label = labelOf(el);
         value = el.selectedIndex > 0 ? el.options[el.selectedIndex].text : "";
@@ -652,7 +675,11 @@
   const pageErrors = () => [...document.querySelectorAll('[data-automation-id*="error" i], [role=alert], [aria-live=assertive]')]
     .filter(visible).map((e) => clean(e.innerText)).filter(Boolean).slice(0, 6);
   // A resume field with nothing in it yet (Workday lists uploaded files as file-upload-item).
-  const needsResume = () => !!document.querySelector('input[type="file"]') &&
+  // A resume field with nothing in it yet, on this page (Workday lists uploaded files as
+  // file-upload-item). The input may be hidden behind a styled drop zone, but its box must show:
+  // amazon.jobs keeps its Resume step's Replace input, hidden, on every step.
+  const shownBox = (f) => visible(f) || [1, 2, 3].some((n) => { let a = f; for (let i = 0; i < n && a; i++) a = a.parentElement; return a && visible(a); });
+  const needsResume = () => [...document.querySelectorAll('input[type="file"]')].some(shownBox) &&
     !document.querySelector('[data-automation-id="file-upload-item"]');
 
   const byId = (id) => [...document.querySelectorAll(`[data-automation-id="${id}"]`)].find(visible);
