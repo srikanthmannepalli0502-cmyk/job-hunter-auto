@@ -7,8 +7,11 @@ async function settings() {
 async function api(path, { method = "GET", body = null, raw = false } = {}) {
   const { appUrl, key } = await settings();
   if (!appUrl || !key) throw new Error("Open the extension settings and enter your app address and key.");
+  // The key is the only credential. Azure's sign-in layer refuses a POST from the extension that
+  // carries your app sign-in cookie (HTTP 403, empty body), so cookies are left off.
   const resp = await fetch(appUrl + path, {
     method,
+    credentials: "omit",
     headers: { "X-Extension-Key": key, ...(body ? { "Content-Type": "application/json" } : {}) },
     body: body ? JSON.stringify(body) : null,
   });
