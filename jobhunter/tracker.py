@@ -77,6 +77,7 @@ class Job(Base):
     apply_progress: Mapped[str | None] = mapped_column(Text)
     # Shortlisted in the app: the extension opens the application once the tailored resume is ready.
     open_when_ready: Mapped[bool] = mapped_column(Boolean, default=False)
+    open_requested_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))  # when you shortlisted it
     # Times the posting came back after it was taken down, or was re-posted with a newer date: a role
     # that's hard to fill, or an old opening kept alive.
     reposts: Mapped[int] = mapped_column(Integer, default=0)
@@ -182,7 +183,7 @@ _ADDED_COLUMNS = {
         "job_type": "VARCHAR(20)", "sponsorship_warning": "VARCHAR(300)", "last_seen": "DATETIME",
         "closed": "BOOLEAN DEFAULT 0", "decision": "VARCHAR(20) DEFAULT 'new'",
         "kit_resume_path": "VARCHAR(500)", "kit_cover_path": "VARCHAR(500)", "kit_notes": "TEXT", "kit_feedback": "TEXT", "outreach": "TEXT",
-        "apply_progress": "TEXT", "open_when_ready": "BOOLEAN DEFAULT 0", "reposts": "INTEGER DEFAULT 0",
+        "apply_progress": "TEXT", "open_when_ready": "BOOLEAN DEFAULT 0", "open_requested_at": "DATETIME", "reposts": "INTEGER DEFAULT 0",
     },
     "applications": {"cover_note_path": "VARCHAR(500)"},
 }
@@ -349,14 +350,18 @@ class Tracker:
             job = s.get(Job, job_id)
             if job is not None:
                 job.open_when_ready = value
+                if value:
+                    job.open_requested_at = _now()
                 s.commit()
 
     def ready_to_open(self) -> list[Job]:
-        """Shortlisted jobs whose tailored resume is ready and whose application hasn't been opened yet."""
+        """Shortlisted jobs whose tailored resume is ready and whose application hasn't been opened yet,
+        the one you shortlisted last first."""
         applied = select(Application.job_id)
         with self.Session() as s:
             return list(s.scalars(select(Job).where(Job.open_when_ready, Job.kit_resume_path.is_not(None),
-                                                    ~Job.closed, ~Job.id.in_(applied)).order_by(Job.id)))
+                                                    ~Job.closed, ~Job.id.in_(applied))
+                                     .order_by(Job.open_requested_at.desc().nulls_last(), Job.id.desc())))
 
     def clear_feedback(self, job_id: int) -> None:
         with self.Session() as s:

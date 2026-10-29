@@ -66,6 +66,7 @@ function load(page, { url = "https://comcast.wd5.myworkdayjobs.com/en-US/careers
   const api = async (p, opts = {}) => {
     if (p.startsWith("/api/x/context")) return { job: { id: 7, title: "Data Analyst", company: "Comcast", has_resume: true } };
     if (p.startsWith("/api/x/progress/")) { out.posts.push(opts.body); return { saved: true }; }
+    if (p.startsWith("/api/x/closed/")) { out.posts.push({ closed: p }); return { closed: 1 }; }
     throw new Error(`unexpected call ${p}`);
   };
   const ctx = vm.createContext({
@@ -141,4 +142,24 @@ test("a password that doesn't work and an account that exists: it stops and asks
   assert.equal(session.runs[5].state, "needs_you");
   assert.deepEqual(page.calls.filter((c) => c.startsWith("account")), ["account:signin", "account:create"]);
   assert.match(out.notes.at(-1).message, /already an account/);
+});
+
+test("a posting that's been taken down is marked closed, and nothing is filled", async () => {
+  const page = fakePage(STEPS);
+  page.api.status = () => ({ workday: false, step: null, posting: false, account: null, closed: "no longer accepting", form: 0, errors: [] });
+  const { ctx, out, session } = load(page);
+  await ctx.startRun(5, { jobId: 7 });
+  assert.equal(session.runs[5].state, "stopped");
+  assert.deepEqual(out.posts, [{ closed: "/api/x/closed/7" }]);
+  assert.ok(!page.calls.includes("fill"));
+});
+
+test("on a site it doesn't know, a posting page (a search box, no resume upload) isn't filled", async () => {
+  const page = fakePage(STEPS);
+  page.api.status = () => ({ workday: false, step: null, posting: false, account: null, closed: "", needsResume: false, form: 2, errors: [] });
+  const { ctx, out, session } = load(page, { url: "https://www.amazon.jobs/en/jobs/10589280/data-scientist" });
+  await ctx.startRun(5, { jobId: 7 });
+  assert.equal(session.runs[5].state, "needs_you");
+  assert.ok(!page.calls.includes("fill"));
+  assert.match(out.notes.at(-1).message, /amazon\.jobs/);
 });

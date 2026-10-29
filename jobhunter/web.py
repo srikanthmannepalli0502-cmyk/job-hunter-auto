@@ -959,6 +959,9 @@ def make_handler(app: App, port: int):
                 if method == "POST" and len(parts) == 2 and parts[0] == "opened" and parts[1].isdigit():
                     app.tracker.set_open_when_ready(int(parts[1]), False)
                     return self.send_json({"saved": True})
+                if method == "POST" and len(parts) == 2 and parts[0] == "closed" and parts[1].isdigit():
+                    # The extension found the posting taken down when it opened it.
+                    return self.send_json({"closed": app.tracker.close_jobs(job_ids=[int(parts[1])])})
                 if method == "POST" and len(parts) == 2 and parts[0] == "progress" and parts[1].isdigit():
                     state = str(data.get("state", ""))
                     if state not in ("review", "needs_you", "clear"):

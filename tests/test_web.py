@@ -286,3 +286,18 @@ def test_shortlisting_opens_the_application_once_the_resume_is_ready(server, mon
     assert ctx["job"]["id"] == acme.id
     ctx = httpx.get(f"{base}/api/x/context", params={"job_id": 99999, "url": "https://example.com/login"}, headers=h).json()
     assert ctx["job"] is None
+
+
+def test_the_last_shortlisted_opens_first_and_a_closed_posting_is_skipped(server):
+    base, app = server()
+    ingest(base, ["Acme", "Beta"])
+    acme, beta = sorted(app.tracker.top_jobs(limit=5), key=lambda j: j.company)
+    h = {"X-Extension-Key": app.extension_key()}
+    for job in (beta, acme):  # Beta shortlisted long ago, Acme just now
+        app.tracker.set_kit(job.id, resume_path="r.pdf")
+        app.tracker.set_open_when_ready(job.id, True)
+        time.sleep(0.01)
+    assert [j["id"] for j in httpx.get(f"{base}/api/x/ready", headers=h).json()["jobs"]] == [acme.id, beta.id]
+    # The extension found Acme's posting taken down.
+    assert httpx.post(f"{base}/api/x/closed/{acme.id}", json={}, headers=h).json() == {"closed": 1}
+    assert [j["id"] for j in httpx.get(f"{base}/api/x/ready", headers=h).json()["jobs"]] == [beta.id]

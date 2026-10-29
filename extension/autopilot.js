@@ -37,7 +37,7 @@ async function pageStatus(tabId) {
              [...all].sort((a, b) => b.form - a.form)[0];
   return st ? { ...st, captcha: all.some((s) => s.captcha) } : null;
 }
-const known = (st) => st && (st.workday || st.account || st.posting || st.captcha || st.verifyEmail || st.form > 0);
+const known = (st) => st && (st.workday || st.account || st.posting || st.closed || st.captcha || st.verifyEmail || st.form > 0);
 async function waitStatus(tabId, tries = 8) {
   let st = null;
   for (let i = 0; i < tries && !known(st); i++) {
@@ -125,6 +125,11 @@ async function drive(tabId, run, trust) {
     if (!known(st)) return waitHere("the application form didn't appear");
     const where = st.step ? `step ${st.step.n} of ${st.step.of} (${st.step.name})` : "";
 
+    if (st.closed) {
+      // Marked closed in the app, so it isn't opened again; the next shortlisted job opens on the next check.
+      if (run.jobId) await api(`/api/x/closed/${run.jobId}`, { method: "POST", body: {} }).catch(() => {});
+      return finish(run, "stopped", where, `The posting is closed ("${st.closed}"). Marked closed in Job Hunter; the next shortlisted job opens next.`);
+    }
     if (st.captcha) return finish(run, "needs_you", where, "The page shows a CAPTCHA. Solve it yourself, then click Continue.");
     if (st.verifyEmail && !st.account && !st.posting) {
       run.tried = {}; // after you verify, it signs in again
@@ -202,6 +207,11 @@ async function drive(tabId, run, trust) {
     }
     if (WORKDAY_HOST.test(host)) return waitHere("the Workday application didn't open");
 
+    // On a site Job Hunter doesn't step through (e.g. amazon.jobs, which signs in with an Amazon
+    // account), a posting page with a search box isn't an application: leave it for you to start.
+    if (!ONE_PAGE_HOST.test(host) && !st.needsResume && st.form < 8) {
+      return finish(run, "needs_you", "", `Job Hunter doesn't apply on ${host} by itself. Press Apply and sign in yourself; once the application form shows, click Continue and it fills it.`);
+    }
     // A one-page form (Greenhouse, Lever, Ashby, or a site Job Hunter doesn't step through).
     const c = await context(tab);
     const { filled, skipped } = await fillPage(tabId, c);
