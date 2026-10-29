@@ -310,3 +310,19 @@ test("other sites don't use the debugger", async () => {
   await ctx.startRun(5, { jobId: 7 });
   assert.deepEqual(out.debug, []);
 });
+
+test("a page of only buttons, next to frames with nothing: the frame with Save & continue is the page", async () => {
+  const page = otherSite();
+  const status = page.api.status;
+  page.api.status = () => { const s = status(); return page.view === "app" && page.n === 0 ? { ...s, form: 0 } : s; };
+  const { ctx, out, session } = load(page);
+  // The tab's other frames (chat, analytics) report an empty page, listed first.
+  const exec = ctx.chrome.scripting.executeScript;
+  ctx.chrome.scripting.executeScript = async (o) => {
+    const r = await exec(o);
+    return o.args?.[0] === "status" ? [{ result: { workday: false, form: 0, next: false, review: false, errors: [] } }, ...r] : r;
+  };
+  await ctx.startRun(5, { jobId: 7 });
+  assert.equal(session.runs[5].state, "review");
+  assert.ok(out.notes.at(-1).title.startsWith("Ready to submit"));
+});

@@ -31,12 +31,13 @@ async function inTab(tabId, name, arg, mainOnly = false) {
 }
 
 // What the page shows, or null while it loads (or if it blocks scripts). The frame with the
-// application wins; a CAPTCHA in any frame counts.
+// application wins: the most fields, then a Next / Submit button (a page of only buttons, like
+// amazon.jobs's Resume step, ties with the page's chat and analytics frames). A CAPTCHA in any frame counts.
 async function pageStatus(tabId) {
   let all;
   try { all = await inTab(tabId, "status"); } catch { return null; }
   const st = all.find((s) => s.workday) || all.find((s) => s.account) || all.find((s) => s.posting) ||
-             [...all].sort((a, b) => b.form - a.form)[0];
+             [...all].sort((a, b) => (b.form - a.form) || ((b.next || b.review) - (a.next || a.review)))[0];
   return st ? { ...st, captcha: all.some((s) => s.captcha) } : null;
 }
 // A page the run can act on. A page of only buttons counts when one is Next / Skip & continue
