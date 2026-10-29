@@ -29,6 +29,7 @@ chrome.notifications.onButtonClicked.addListener((id) => {
 chrome.runtime.onMessage.addListener((msg, _sender, reply) => {
   if (msg?.autopilot === "run") startRun(msg.tabId, { jobId: msg.jobId, trust: !!msg.trust }).catch(() => {});
   if (msg?.autopilot === "stop") stopping.add(msg.tabId);
+  if (msg?.autoOpen === "check") { checkReady().then(reply); return true; } // reply once the check is done
   reply({ ok: true });
 });
 
@@ -41,18 +42,30 @@ chrome.tabs.onRemoved.addListener((tabId) => saveRun(tabId, null));
 // time, in the front tab: Chrome slows pages in background tabs.
 chrome.alarms.get("ready").then((a) => a || chrome.alarms.create("ready", { periodInMinutes: 1 }));
 chrome.alarms.onAlarm.addListener((a) => {
-  if (a.name === "ready") tick().then(openReady).catch(() => {});
+  if (a.name === "ready") tick().then(checkReady);
 });
+
+// What the last check found, shown in the settings and the side panel ("autoStatus").
+async function checkReady() {
+  let text;
+  try { text = await openReady(); } catch (e) { text = `Couldn't ask your Job Hunter app: ${e.message}`; }
+  const autoStatus = { at: Date.now(), text };
+  await chrome.storage.local.set({ autoStatus });
+  return autoStatus;
+}
 
 async function openReady() {
   const { autoOpen = true } = await chrome.storage.local.get("autoOpen");
-  if (!autoOpen || (await activeRuns()).length) return;
+  if (!autoOpen) return "Turned off in the settings.";
+  const going = await activeRuns();
+  if (going.length) return `Filling ${going[0].title || "an application"} first.`;
   const { jobs = [] } = await api("/api/x/ready");
   const job = jobs[0];
-  if (!job) return;
+  if (!job) return "No shortlisted job waiting to open (its resume may still be in progress).";
   await api(`/api/x/opened/${job.id}`, { method: "POST", body: {} }); // once, even if a step below fails
   const tab = await chrome.tabs.create({ url: job.url, active: true });
   await saveRun(tab.id, { tabId: tab.id, jobId: job.id, title: `${job.title} at ${job.company}`, state: "waiting",
                           lines: [{ text: "Opened after you shortlisted it; filling it up to Review.", kind: "muted" }],
                           tried: {}, starts: 0, pages: 0, since: Date.now(), progressAt: Date.now() });
+  return `Opened ${job.title} at ${job.company}.`;
 }

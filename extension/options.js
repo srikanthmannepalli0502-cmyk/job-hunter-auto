@@ -60,3 +60,12 @@ $("removeLogin").addEventListener("click", async () => {
   $("loginEmail").value = $("loginPassword").value = "";
   $("loginStatus").textContent = "Removed. Job Hunter will ask you to sign in yourself.";
 });
+
+// What auto-open found the last time it looked (every minute), and a way to look now.
+const showAuto = (st) => { $("autoStatus").textContent = st ? `${new Date(st.at).toLocaleTimeString()}: ${st.text}` : "not yet"; };
+chrome.storage.local.get("autoStatus").then(({ autoStatus }) => showAuto(autoStatus));
+chrome.storage.onChanged.addListener((c, area) => { if (area === "local" && c.autoStatus) showAuto(c.autoStatus.newValue); });
+$("checkNow").addEventListener("click", async () => {
+  $("autoStatus").textContent = "checking...";
+  showAuto(await chrome.runtime.sendMessage({ autoOpen: "check" }));
+});

@@ -183,6 +183,11 @@ $("applied").addEventListener("click", async () => {
   $("appliedResult").innerHTML = `<span class="ok">Recorded application #${r.application_id}${r.resume ? " with your tailored resume" : ""}.</span>`;
 });
 
+// Auto-open's last check, so you can see why a shortlisted job hasn't opened.
+const showAuto = (st) => { $("autoStatus").textContent = st ? `Auto-open (${new Date(st.at).toLocaleTimeString()}): ${st.text}` : ""; };
+chrome.storage.local.get("autoStatus").then(({ autoStatus }) => showAuto(autoStatus));
+chrome.storage.onChanged.addListener((c, area) => { if (area === "local" && c.autoStatus) showAuto(c.autoStatus.newValue); });
+
 chrome.tabs.onActivated.addListener(refresh);
 // Workday moves from the posting to the application without a page load: a new URL is enough.
 chrome.tabs.onUpdated.addListener((_id, info) => { if (info.status === "complete" || info.url) refresh(); });
