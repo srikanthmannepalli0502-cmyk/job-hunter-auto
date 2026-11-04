@@ -35,8 +35,9 @@ test("sponsorship questions that ask something narrower are left to you", () => 
 test("work authorization: U.S. only, and never falls through to another field", () => {
   assert.equal(value("Are you legally authorized to work in the United States?"), "Yes");
   assert.equal(value("Are you legally authorized to work in Canada?"), "yours");
-  // Contains "states" but must not be answered with your state.
-  assert.equal(value("Are you authorized to work in the United States without sponsorship?"), "yours");
+  // Contains "states" but must not be answered with your state: it's both profile answers together
+  // (authorized: Yes, but needs sponsorship: Yes here, so No).
+  assert.equal(value("Are you authorized to work in the United States without sponsorship?"), "No");
   assert.equal(value("What is your current immigration status?"), "F-1 OPT");
 });
 
