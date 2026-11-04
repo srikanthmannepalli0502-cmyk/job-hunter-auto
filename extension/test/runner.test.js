@@ -344,3 +344,22 @@ test("on Workday, the sign-in / sign-up button gets a real mouse click from the 
   assert.ok(clicks.some((d) => d.includes('"mousePressed"') && d.includes('"x":640') && d.includes('"y":512')));
   assert.ok(page.calls.includes("settleAccount"));
 });
+
+test("'Verify your account before you sign in': asks for the email again, opens its link, then signs in", async () => {
+  const page = fakePage(STEPS);
+  page.view = "signin";
+  let verified = false;
+  page.api.account = ({ mode }) => {
+    if (mode === "signin" && !verified) return { done: false, errors: ["Error: Verify your account before you sign in or request a verification email."] };
+    if (mode === "create") return { done: false, errors: ["There is already an account with this email."] };
+    page.view = "app";
+    return { done: true };
+  };
+  page.api.pressText = () => ({ pressed: true, text: "request a verification email" });
+  page.onOpen = (to) => { if (/verify/.test(to)) { verified = true; page.view = "signin"; } };
+  const { ctx, out, session } = load(page, { mail: ({ kind }) => (kind === "link" ? { link: "https://capitalone.wd12.myworkdayjobs.com/verify?t=1" } : { none: true }) });
+  await ctx.startRun(5, { jobId: 7 });
+  assert.ok(page.calls.includes("pressText"));
+  assert.deepEqual(out.opened, ["https://capitalone.wd12.myworkdayjobs.com/verify?t=1"]);
+  assert.equal(session.runs[5].state, "review");
+});

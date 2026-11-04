@@ -136,9 +136,9 @@ async function drive(tabId, run, trust) {
   };
   // The site's confirmation email: {link} / {code}, or {stop} once it has finished the run or
   // set it to wait for the email.
-  const mail = async (kind, where) => {
+  const mail = async (kind, where, from = null) => {
     const login = await Vault.load();
-    const since = run.accountAt || run.since;
+    const since = from || run.accountAt || run.since;
     await say(run, `Looking in ${login?.email || "your email"} for the site's ${kind === "code" ? "code" : "confirmation link"}`, "muted");
     const r = await fromMail({ email: login?.email, kind, since, hosts: [...(run.hosts || []), new URL((await chrome.tabs.get(tabId)).url).hostname] })
       .catch((e) => ({ error: e.message }));
@@ -194,6 +194,25 @@ async function drive(tabId, run, trust) {
       if (trust && first) run.tried = {};
       const workday = WORKDAY_HOST.test(host);
       let mode = st.account;
+      // The account exists but isn't confirmed yet ("Verify your account before you sign in or
+      // request a verification email", Capital One): ask the site for a fresh email once, then open
+      // its link from your Gmail, then sign in again.
+      if (run.mustVerify) {
+        if (!run.resentAt) {
+          const [p] = await inTab(tabId, "pressText", "request a verification email|resend (the )?(verification )?email|send (a )?(new )?verification", true).catch(() => []);
+          run.resentAt = Date.now();
+          await say(run, p?.pressed ? "Asked the site to send the verification email again" : "Waiting for the site's verification email", "muted");
+          await pause(5000);
+        }
+        const r = await mail("link", where, run.resentAt - 10 * 60 * 1000);
+        if ("stop" in r) return;
+        await say(run, "Opening the confirmation link from the site's email", "ok");
+        await chrome.tabs.update(tabId, { url: r.link });
+        Object.assign(run, { tried: {}, verified: true, reopened: false, mustVerify: false });
+        moved();
+        await pause(4000);
+        continue;
+      }
       if (mode === "code") {
         const r = await mail("code", where);
         if ("stop" in r) return;
@@ -239,6 +258,10 @@ async function drive(tabId, run, trust) {
         run.accountError = (r.errors || [r.reason]).join("; ");
         await say(run, run.accountError, "warn");
         if (mode === "create" && /already|exist|in use/i.test(run.accountError)) run.tried.create = true;
+        if (/verify your (account|email)|verification (email|link)|not (yet )?(been )?verified|confirm your (email|account)/i.test(run.accountError) && !run.verified) {
+          run.mustVerify = true;
+          run.tried = {};
+        }
       }
       await pause(3000);
       continue;

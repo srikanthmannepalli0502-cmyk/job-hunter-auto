@@ -8,7 +8,7 @@
 // Which answer and option to use comes from matching.js (injected first). Every value is read back
 // after filling: one the page didn't keep is reported as skipped, not filled.
 (() => {
-  const VERSION = 35;
+  const VERSION = 36;
   if (window.__jobHunterApi && window.__jobHunterApi.version >= VERSION) return;
   const M = window.__jobHunterMatch;
   if (!M) throw new Error("Job Hunter: matching.js must be injected before content.js");
@@ -1069,6 +1069,12 @@
     start: () => start(),
     account: (a) => account(a),
     settleAccount: (kind) => settleAccount(kind),
+    // A link or button by what it says (the sign-in form's "request a verification email").
+    pressText: (pattern) => {
+      const b = buttons(new RegExp(pattern, "i"))[0];
+      if (b) pressButton(b);
+      return { pressed: !!b, text: b ? say(b) : "" };
+    },
     version: VERSION,
     questions: () => ({ questions: questions(), title: document.title }),
     fill: (ctx) => fill(ctx),
