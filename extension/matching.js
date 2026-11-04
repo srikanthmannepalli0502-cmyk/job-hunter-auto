@@ -348,6 +348,12 @@
           : [];
       return values.length ? { values: [...new Set(values)], from: "your degree (closest option)" } : null;
     }
+    // A city list with many "Syracuse"s (Greenhouse's Location (City)): your city with its state first.
+    if (/\b(city|location)\b/.test(l) && !/\b(relocat|remote|prefer|anticipate|willing)\b/.test(l)) {
+      const f = (k) => (ctx.fields || []).find((x) => x.key === k)?.value;
+      const city = f("city"), state = f("state");
+      if (city && state) return { values: [`${city}, ${state}`, `${city}, ${state}, ${f("country") || "United States"}`, city], from: "your city and state" };
+    }
     if (/\bphone (device )?type\b|\btype of phone\b/.test(l)) {
       return { values: ["Mobile", "Cell", "Cell Phone", "Mobile Phone"], from: "your phone (mobile)" };
     }

@@ -8,7 +8,7 @@
 // Which answer and option to use comes from matching.js (injected first). Every value is read back
 // after filling: one the page didn't keep is reported as skipped, not filled.
 (() => {
-  const VERSION = 42;
+  const VERSION = 43;
   if (window.__jobHunterApi && window.__jobHunterApi.version >= VERSION) return;
   const M = window.__jobHunterMatch;
   if (!M) throw new Error("Job Hunter: matching.js must be injected before content.js");
@@ -627,6 +627,9 @@
       if (type === "file") continue;
       const label = type === "radio" ? radioQuestion(el) : labelOf(el);
       if (sensitive.test(label)) continue;
+      // A newsletter / updates / job-alert box on the page (Stripe's "Get industry insights and
+      // updates"): not part of the application, never filled.
+      if (NEWSLETTER.test(`${label} ${el.name || ""} ${el.id || ""} ${el.placeholder || ""}`)) continue;
 
       const sec = section(el);
       if (sec) {
