@@ -39,7 +39,9 @@ function render() {
     <button type="button" data-automation-id="createAccountLink">Create Account</button></form>`;
   if (view === "app") page.innerHTML = `<ol><li data-automation-id="progressBarActiveStep">current step 1 of 4\nMy Information</li></ol>`;
 }
-const error = (text) => document.querySelector("form").insertAdjacentHTML("beforeend", `<div data-automation-id="errorMessage">${text}</div>`);
+// ?inStep (Capital One): messages sit under the field as inputAlert, "Error:" beside the text.
+const error = (text) => document.querySelector("form").insertAdjacentHTML("beforeend", location.search.includes("inStep")
+  ? `<p><span data-automation-id="inputAlert">Error:</span> ${text}</p>` : `<div data-automation-id="errorMessage">${text}</div>`);
 const val = (id) => document.getElementById(id).value;
 document.addEventListener("click", (e) => {
   const t = e.target.closest("[data-automation-id]");

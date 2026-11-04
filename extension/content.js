@@ -8,7 +8,7 @@
 // Which answer and option to use comes from matching.js (injected first). Every value is read back
 // after filling: one the page didn't keep is reported as skipped, not filled.
 (() => {
-  const VERSION = 33;
+  const VERSION = 34;
   if (window.__jobHunterApi && window.__jobHunterApi.version >= VERSION) return;
   const M = window.__jobHunterMatch;
   if (!M) throw new Error("Job Hunter: matching.js must be injected before content.js");
@@ -831,8 +831,12 @@
   }
   // Another site's application at its last page: a Submit button and no Next.
   const finalPage = () => !step() && !loginForm() && controls().length > 0 && !nextButton() && buttons(SUBMIT_TEXT).length > 0;
-  const pageErrors = () => [...document.querySelectorAll('[data-automation-id*="error" i], [role=alert], [aria-live=assertive]')]
-    .filter(visible).map((e) => clean(e.innerText)).filter(Boolean).slice(0, 6);
+  // Also Workday's messages under a field (data-automation-id="inputAlert", "Error:" with the message
+  // beside it), as on Capital One's Create Account: "Please enter a valid email".
+  const pageErrors = () => [...new Set([
+    ...[...document.querySelectorAll('[data-automation-id*="error" i], [role=alert], [aria-live=assertive]')].filter(visible).map((e) => clean(e.innerText)),
+    ...[...document.querySelectorAll('[data-automation-id="inputAlert"]')].filter(visible).map((e) => clean(e.parentElement?.innerText || e.innerText)),
+  ])].filter((t) => t && !/^error:?$/i.test(t)).slice(0, 6);
   // A resume field with nothing in it yet (Workday lists uploaded files as file-upload-item).
   // A resume field with nothing in it yet, on this page (Workday lists uploaded files as
   // file-upload-item). The input may be hidden behind a styled drop zone, but its box must show:
