@@ -190,3 +190,11 @@ test("authorized to work in the U.S. without sponsorship: both profile answers t
   assert.equal(M.answerFor(q, ctx("NO", "NO")).value, "No");
   assert.notEqual(M.answerFor("Are you authorized to work in Canada without sponsorship?", ctx("YES", "NO")).status, "matched");
 });
+
+test("highest education completed, while the resume's degree is still in progress: yours", () => {
+  const ctx = { history: { education: [{ end: "Dec 2099" }], jobs: [] }, answers: [], job: {},
+                fields: [{ key: "degree", label: "Degree", keywords: ["degree", "level of education"], exclude: [], value: "Master's Degree" }] };
+  assert.equal(M.answerFor("What is the highest level of education you have completed?", ctx).status, "yours");
+  assert.equal(M.derived("What is the highest level of education you have completed?", ctx), null);
+  assert.equal(M.derived("Education level", ctx).values[0], "Master's Degree"); // no "completed": the degree it is
+});

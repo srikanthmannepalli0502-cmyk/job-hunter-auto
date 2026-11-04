@@ -8,7 +8,7 @@
 // Which answer and option to use comes from matching.js (injected first). Every value is read back
 // after filling: one the page didn't keep is reported as skipped, not filled.
 (() => {
-  const VERSION = 40;
+  const VERSION = 42;
   if (window.__jobHunterApi && window.__jobHunterApi.version >= VERSION) return;
   const M = window.__jobHunterMatch;
   if (!M) throw new Error("Job Hunter: matching.js must be injected before content.js");
@@ -100,7 +100,15 @@
   const isCombo = (el) => !formField(el) && el.tagName !== "SELECT" &&
     (el.getAttribute("role") === "combobox" || el.getAttribute("aria-haspopup") === "listbox");
   const isListButton = (el) => (el.tagName === "BUTTON" && el.getAttribute("aria-haspopup") === "listbox") || isCombo(el);
-  const shownText = (el) => clean(el.tagName === "INPUT" ? el.value : el.innerText);
+  const shownText = (el) => {
+    if (el.tagName !== "INPUT") return clean(el.innerText);
+    if (el.value) return clean(el.value);
+    const ctl = el.closest('[class*="control"]') || el.parentElement?.parentElement;
+    const chosen = ctl?.querySelectorAll('[class*="single-value"], [class*="singleValue"], [class*="multi-value__label"]');
+    return chosen?.length ? clean([...chosen].map((c) => c.innerText).join(", ")) : "";
+  };
+  // A choice the box now shows: all of the option or part of it ("+1" for "United States +1").
+  const showsChoice = (el, text) => { const s = shownText(live(el)); return !!s && (kept(s, text) || text.includes(s) || s.includes(text)); };
   // The <select> a Select2 box stands for (Select2 puts its box right after it).
   const select2Of = (el) => { const s = el.closest(".select2-container")?.previousElementSibling; return s?.tagName === "SELECT" ? s : null; };
   function isPrompt(el) {
@@ -255,6 +263,7 @@
 
   // The option an answer means, or why there isn't one ("ambiguous" / "unmatched").
   function pickOption(options, answer, label) {
+    options = options.filter((o, i) => options.findIndex((x) => x.text === o.text) === i);
     const r = M.resolveOption(options.map((o) => o.text), answer, label);
     return r.status === "matched" ? { option: options[r.index] } : { reason: r.status };
   }
@@ -289,11 +298,24 @@
     }
     return opts;
   }
+  // A dropdown you type into (React-Select: Greenhouse's Location (City), School): its options load
+  // as you type, so search for each candidate in the box itself.
+  const typable = (btn) => btn.tagName === "INPUT" && (btn.getAttribute("aria-autocomplete") === "list" || btn.getAttribute("role") === "combobox");
+  async function searchIn(btn, query) {
+    const before = new Set(optionEls());
+    btn.focus();
+    typeSearch(btn, query);
+    let opts = [];
+    for (let i = 0; i < 20 && !opts.length; i++) {
+      await sleep(300);
+      opts = optionEls().filter((el) => !before.has(el) || i > 3)
+        .map((el) => ({ el, text: clean(el.innerText || el.getAttribute("aria-label") || "") }))
+        .filter((o) => o.text && !NOT_AN_OPTION.test(o.text));
+    }
+    return opts;
+  }
   async function chooseFromButton(btn, answer, label) {
-    const r = pickOption(await openDropdown(btn, answer), answer, label);
-    if (r.option) { press(r.option.el); await sleep(300); return { text: r.option.text }; }
-    key(document.activeElement || btn, "Escape");
-    return r;
+    return chooseFromButtonAny(btn, [answer], label);
   }
 
   // Workday search-and-pick box: type, search, click the matching result; leave no stray text.
@@ -326,8 +348,16 @@
   }
 
   async function chooseFromButtonAny(btn, values, label) {
-    const r = pickAny(await openDropdown(btn, values[0]), values, label);
-    if (r.option) { press(r.option.el); await sleep(300); return { text: r.option.text, value: r.value }; }
+    let r = pickAny(await openDropdown(btn, values[0]), values, label);
+    if (!r.option && typable(btn)) {
+      for (const v of values.slice(0, 4)) {
+        const found = pickOption(await searchIn(btn, v), v, label);
+        if (found.option) { r = { ...found, value: v }; break; }
+        if (found.reason === "ambiguous") r = found;
+      }
+    }
+    if (r.option) { press(r.option.el); await sleep(400); return { text: r.option.text, value: r.value }; }
+    if (typable(btn)) typeSearch(btn, "");
     key(document.activeElement || btn, "Escape");
     return r;
   }
@@ -670,7 +700,7 @@
         const r = d ? await chooseFromButtonAny(el, d.values, label)
           : alt ? await chooseFromButtonAny(el, [ans.value, ...alt.values], label) : await chooseFromButton(el, ans.value, label);
         const from = d ? d.from : alt && r.value && r.value !== ans.value ? alt.from : ans.from;
-        if (r.text) note(label, r.text, from, () => kept(shownText(live(el)), r.text));
+        if (r.text) note(label, r.text, from, () => showsChoice(el, r.text));
         else skipped.push(why(label, r.reason, d ? d.values[0] : ans.value));
         continue;
       }
@@ -696,6 +726,11 @@
       }
       // A date box an answer follows from (graduation month), written as the box asks.
       const dated = ans.status === "none" && !isPrompt(el) && el.tagName !== "SELECT" ? M.derived(label, ctx) : null;
+      if (dated?.text && dated.values[0]) { // a text answer that follows from your resume (current job title)
+        setValue(el, dated.values[0]);
+        note(label, dated.values[0], dated.from, () => kept(live(el).value, dated.values[0]), el);
+        continue;
+      }
       if (dated?.date) {
         const { year, month } = dated.date, mm = String(month).padStart(2, "0");
         const hint = `${el.placeholder || ""} ${el.type}`;

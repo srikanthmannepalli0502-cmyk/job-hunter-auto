@@ -142,6 +142,15 @@
   // The answer for a question, from a saved answer or a profile field.
   // {status: "matched", value, from} | {status: "conflict"} (saved answers disagree)
   // | {status: "yours"} (a fail-closed question nothing answers exactly) | {status: "none"}.
+  // A question about the degree you have completed / earned, while the resume's degree ends later.
+  function degreeUnfinished(l, ctx) {
+    if (!/\b(completed|complete|earned|obtained|attained|achieved|received)\b/.test(l)) return false;
+    const m = String(ctx.history?.education?.[0]?.end || "").match(/([A-Za-z]{3})[a-z]*\.?\s+(\d{4})|(\d{4})/);
+    if (!m) return false;
+    const month = m[1] ? ["jan", "feb", "mar", "apr", "may", "jun", "jul", "aug", "sep", "oct", "nov", "dec"].indexOf(m[1].toLowerCase()) : 11;
+    return new Date(+(m[2] || m[3]), month + 1, 0) > new Date();
+  }
+
   function answerFor(label, ctx) {
     if (!label) return { status: "none" };
     const saved = savedAnswer(label, ctx.answers || [], ctx.job?.company || "");
@@ -170,6 +179,9 @@
       }
     }
     if (!field && !t && /^(your )?name$/.test(l)) field = (ctx.fields || []).find((f) => f.key === "full_name");
+    // "Highest education you have completed" while the degree on your resume is still in progress:
+    // not that degree. Yours (the resume lists no earlier one).
+    if (field?.key === "degree" && degreeUnfinished(l, ctx)) return { status: "yours" };
     if (field) return { status: "matched", value: field.value, from: field.label };
     return { status: t ? "yours" : "none" };
   }
@@ -282,6 +294,15 @@
       const mine = (ctx.history?.jobs || []).map((j) => norm(generalize(j.company, job.company)));
       return { values: [mine.some((c) => c.includes("the company")) ? "Yes" : "No"], from: "your work history" };
     }
+    // "What is your current or previous job title?" / "Who is your current or previous employer?":
+    // the most recent job on your resume (a text box; content.js types it).
+    if (/\b(current|most recent|previous|latest)\b/.test(l) && !/\b(work experience|section)\b/.test(l)) {
+      const j = (ctx.history?.jobs || [])[0];
+      if (j && /\b(job title|title|position|role)\b/.test(l) && !/\b(employer|company)\b/.test(l)) return { values: [j.title], text: true, from: "your resume's most recent job" };
+      if (j && /\b(employer|company)\b/.test(l) && !/\b(title|position)\b/.test(l) && !EMPLOYED.test(l.replace(/\bemployer\b/g, ""))) {
+        return { values: [j.company], text: true, from: "your resume's most recent job" };
+      }
+    }
     // "Have you previously applied to Capital One?": yes when Job Hunter recorded an application there.
     // Otherwise it's yours: you may have applied without Job Hunter.
     if (/\b(previously|ever|before|in the past)\b.*\bappl(y|ied)\b|\bappl(y|ied)\b.*\b(before|previously|in the past)\b/.test(l) && !RELATED.test(l)) {
@@ -317,7 +338,8 @@
       return { values: [...new Set(values)], from: "your degree (closest option)" };
     }
     // A degree list without "Master's Degree": the other names lists use for the same level.
-    if (/^(degree|highest degree|degree type|level of education|education level|highest (level of )?education)\b/.test(l)) {
+    if (/^(degree|degree type)$|\b(highest degree|level of education|education level|highest (level of )?(education|degree))\b/.test(l)) {
+      if (degreeUnfinished(l, ctx)) return null;
       const degree = (ctx.fields || []).find((f) => f.key === "degree")?.value || ctx.history?.education?.[0]?.degree || "";
       const values = /master/i.test(degree)
         ? [degree, "Master's Degree", "Masters Degree", "Master's", "Masters", "Master", "Master of Science", "MS", "M.S.", "Graduate Degree"]
