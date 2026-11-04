@@ -307,3 +307,12 @@ def test_the_last_shortlisted_opens_first_and_a_closed_posting_is_skipped(server
     # The extension found Acme's posting taken down.
     assert httpx.post(f"{base}/api/x/closed/{acme.id}", json={}, headers=h).json() == {"closed": 1}
     assert [j["id"] for j in httpx.get(f"{base}/api/x/ready", headers=h).json()["jobs"]] == [beta.id]
+
+
+def test_queued_resumes_say_how_many_are_ahead(server):
+    base, app = server()
+    ingest(base, ["Acme", "Beta", "Gamma"])
+    a, b, c = sorted(app.tracker.top_jobs(limit=5), key=lambda j: j.company)
+    app.worker.status.update({a.id: "generating", b.id: "queued", c.id: "queued"})
+    assert "generating" in app.resume_state(a)
+    assert "queued (1 ahead)" in app.resume_state(b) and "queued (2 ahead)" in app.resume_state(c)

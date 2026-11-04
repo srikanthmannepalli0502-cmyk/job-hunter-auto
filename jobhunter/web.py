@@ -91,6 +91,7 @@ class KitWorker:
     def submit(self, job_id: int, what: str = "resume") -> None:
         if self.status.get(job_id) in ("queued", "generating"):
             return
+        self.status.pop(job_id, None)  # to the end of the line, for the "N ahead" count
         self.status[job_id] = "queued"
         self.jobs.put((job_id, what))
 
@@ -161,8 +162,12 @@ class App:
 
     def resume_state(self, j: Job) -> str:
         state = self.worker.status.get(j.id, "")
-        if state in ("queued", "generating"):
+        if state == "generating":
             return '<span class="tag">resume: generating&hellip;</span>'
+        if state == "queued":  # one resume at a time: say how many are before it (in the order submitted)
+            waiting = [jid for jid, s in self.worker.status.items() if s in ("queued", "generating")]
+            ahead = waiting.index(j.id)
+            return f'<span class="tag">resume: queued{f" ({ahead} ahead)" if ahead > 0 else ""}</span>'
         if state.startswith("failed"):
             return '<span class="tag bad">resume failed</span>'
         return '<span class="tag">resume ready</span>' if j.kit_resume_path else ""

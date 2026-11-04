@@ -8,7 +8,7 @@
 // Which answer and option to use comes from matching.js (injected first). Every value is read back
 // after filling: one the page didn't keep is reported as skipped, not filled.
 (() => {
-  const VERSION = 31;
+  const VERSION = 32;
   if (window.__jobHunterApi && window.__jobHunterApi.version >= VERSION) return;
   const M = window.__jobHunterMatch;
   if (!M) throw new Error("Job Hunter: matching.js must be injected before content.js");
@@ -893,7 +893,18 @@
     if (fields().length >= 3) return null;
     return buttons(/^(apply|apply now|apply here|apply online|apply for this (job|position|role)|apply to this (job|position|role)|start (your |my )?application|begin (your )?application)$/i)[0] || null;
   }
-  const CAPTCHA = 'iframe[src*="recaptcha"], iframe[src*="hcaptcha"], iframe[src*="turnstile"], [data-automation-id*="captcha" i]';
+  // A CAPTCHA you'd have to solve: a puzzle or "I'm not a robot" box you can see. Not Workday's empty
+  // noCaptchaWrapper (on Capital One's sign-in), and not Google's invisible reCAPTCHA or its badge.
+  const CAPTCHA_FRAME = 'iframe[src*="recaptcha"], iframe[src*="hcaptcha"], iframe[src*="turnstile"], iframe[src*="challenges.cloudflare"], iframe[title*="captcha" i]';
+  function captcha() {
+    const frames = [...document.querySelectorAll(CAPTCHA_FRAME)].filter((f) => {
+      const r = f.getBoundingClientRect();
+      return visible(f) && r.width >= 60 && r.height >= 40 && !/[?&]size=invisible\b/.test(f.src || "") && !f.closest(".grecaptcha-badge");
+    });
+    const workday = [...document.querySelectorAll('[data-automation-id*="captcha" i]')]
+      .filter((e) => !/^nocaptcha/i.test(e.getAttribute("data-automation-id") || "") && visible(e) && e.querySelector("iframe, img, canvas"));
+    return frames.length > 0 || workday.length > 0;
+  }
   // A taken-down posting (the app's liveness check uses the same wording), or Workday's missing-page message.
   const CLOSED = new RegExp([
     String.raw`\b(?:this|the)\s+(?:position|role|job|opening|posting|requisition)\s+(?:has\s+been|was|is)\s+(?:filled|closed|cancel+ed|removed|expired)`,
@@ -913,7 +924,7 @@
     const closed = !s && !login && !posting && fields().length < 3 ? (text.replace(/’/g, "'").match(CLOSED) || [""])[0] : "";
     return { workday: !!s, step: s, review: atReview(s) || (!posting && finalPage()), next: !!nextButton(),
              needsResume: needsResume(), signIn: !!login, account: login ? login.kind : null,
-             posting, closed, captcha: [...document.querySelectorAll(CAPTCHA)].some(visible),
+             posting, closed, captcha: captcha(),
              verifyEmail: /verify your (email|account)|verification (email|link)|activate your account|confirm your email/i.test(text),
              form, fields: fields().length, errors: pageErrors(), title: clean(document.querySelector("h1, h2")?.innerText || document.title).slice(0, 80) };
   }
