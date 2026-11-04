@@ -224,7 +224,13 @@ async function drive(tabId, run, trust) {
       if (mode === "create" && !workday) await fillPage(tabId, await context(tab)).catch(() => {}); // name, phone ...
       const { consentOnCreate = true } = await chrome.storage.local.get("consentOnCreate");
       let r = null;
-      try { [r] = await inTab(tabId, "account", { ...login, mode, consent: consentOnCreate, allow: allowPattern(run) }, true); } catch { /* the page reloaded */ }
+      // With the debugger attached (Workday), the submit button gets a real mouse click.
+      const real = focused.has(tabId);
+      try { [r] = await inTab(tabId, "account", { ...login, mode, consent: consentOnCreate, allow: allowPattern(run), real }, true); } catch { /* the page reloaded */ }
+      if (r?.press) {
+        await realClick(tabId, r.press);
+        try { [r] = await inTab(tabId, "settleAccount", r.kind, true); } catch { r = null; } // the page moved on
+      }
       if (r?.done || !r) {
         moved();
         if (mode === "create") run.accountAt = Date.now(); // its confirmation email comes after this
@@ -328,7 +334,7 @@ async function attachResume(tabId, jobId) {
 // click on the page did it). A run's page doesn't have it: you clicked the side panel, or the tab
 // was opened in the background. So on a Workday site the tab is told it is focused, through
 // Chrome's debugger (Chrome shows "Job Hunter started debugging this browser" until the run ends).
-// Only that one setting is used; nothing else goes through the debugger.
+// Besides that setting, it's used only for a real mouse click on a sign-in / sign-up button.
 const focused = new Set();
 async function focusOn(tabId) {
   if (focused.has(tabId) || !chrome.debugger) return;
@@ -337,6 +343,16 @@ async function focusOn(tabId) {
     await chrome.debugger.sendCommand({ tabId }, "Emulation.setFocusEmulationEnabled", { enabled: true });
     focused.add(tabId);
   } catch { /* DevTools is open on the tab, or you cancelled it: the run goes on without */ }
+}
+// A real mouse click at a spot in the tab's page (only the sign-in / sign-up submit button).
+async function realClick(tabId, { x, y }) {
+  const mouse = (type, extra = {}) => chrome.debugger.sendCommand({ tabId }, "Input.dispatchMouseEvent",
+    { type, x, y, button: "left", clickCount: 1, ...extra });
+  try {
+    await mouse("mouseMoved", { button: "none", clickCount: 0 });
+    await mouse("mousePressed");
+    await mouse("mouseReleased");
+  } catch { /* the debugger went away: the page didn't get the click */ }
 }
 function focusOff(tabId) {
   if (!focused.delete(tabId)) return;

@@ -8,7 +8,7 @@
 // Which answer and option to use comes from matching.js (injected first). Every value is read back
 // after filling: one the page didn't keep is reported as skipped, not filled.
 (() => {
-  const VERSION = 34;
+  const VERSION = 35;
   if (window.__jobHunterApi && window.__jobHunterApi.version >= VERSION) return;
   const M = window.__jobHunterMatch;
   if (!M) throw new Error("Job Hunter: matching.js must be injected before content.js");
@@ -965,20 +965,32 @@
   // email-first page (mode "email"), or the code the site emailed (mode "code"). `consent` ticks
   // the sign-up form's terms box. Only on a site the run allows (`allow`, a host pattern).
   // Returns {done} once the form is gone or has changed, else the page's errors.
-  async function account({ email, password, mode, consent, code, allow }) {
+  // Wait for the sign-in / sign-up form to go (or change), or for the page's errors.
+  async function settleAccount(was) {
+    for (let i = 0; i < 80; i++) {
+      await sleep(250);
+      const now = loginForm();
+      if (!now || now.kind !== was) return { done: true };
+      const errors = pageErrors();
+      if (errors.length && i > 4) return { done: false, errors };
+    }
+    return { done: false, reason: "the form stayed" };
+  }
+  // Where a button is, for a real mouse click from the extension (the middle of it, in the page's
+  // viewport, after scrolling it into view).
+  function spot(el) {
+    el.scrollIntoView({ block: "center" });
+    const r = el.getBoundingClientRect();
+    return { x: Math.round(r.left + r.width / 2), y: Math.round(r.top + r.height / 2) };
+  }
+
+  // `real`: the extension clicks the submit button itself, with real mouse input (Capital One's
+  // Workday quietly ignores a sign-up whose click came from the page): fill, then return its spot.
+  async function account({ email, password, mode, consent, code, allow, real }) {
     if (!allow || !new RegExp(allow, "i").test(location.hostname)) return { done: false, reason: `not typing your login on ${location.hostname}` };
     let f = loginForm();
     if (!f) return { done: false, reason: "no sign-in form" };
-    const settle = async (was) => {
-      for (let i = 0; i < 80; i++) {
-        await sleep(250);
-        const now = loginForm();
-        if (!now || now.kind !== was) return { done: true };
-        const errors = pageErrors();
-        if (errors.length && i > 4) return { done: false, errors };
-      }
-      return { done: false, reason: "the form stayed" };
-    };
+    const settle = settleAccount;
     if (mode === "email" || mode === "code") {
       if (f.kind !== mode) return { done: false, reason: `this isn't the ${mode} page` };
       const field = mode === "email" ? f.email : f.code;
@@ -1013,6 +1025,11 @@
     const submit = create ? byId("createAccountSubmitButton") || near(f.password, /^(create( an| my| your)? account|sign up|register|continue|next|submit)$/i)
                           : byId("signInSubmitButton") || near(f.password, SIGNIN_TEXT);
     if (!submit) return { done: false, reason: "no submit button on the form" };
+    if (real) {
+      await sleep(300);
+      const target = submit.parentElement?.querySelector(':scope > [data-automation-id="click_filter"]') || submit;
+      return { press: spot(target), kind: f.kind };
+    }
     pressButton(submit);
     return settle(f.kind);
   }
@@ -1051,6 +1068,7 @@
     redoWork: () => redoWork(),
     start: () => start(),
     account: (a) => account(a),
+    settleAccount: (kind) => settleAccount(kind),
     version: VERSION,
     questions: () => ({ questions: questions(), title: document.title }),
     fill: (ctx) => fill(ctx),

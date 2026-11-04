@@ -326,3 +326,21 @@ test("a page of only buttons, next to frames with nothing: the frame with Save &
   assert.equal(session.runs[5].state, "review");
   assert.ok(out.notes.at(-1).title.startsWith("Ready to submit"));
 });
+
+test("on Workday, the sign-in / sign-up button gets a real mouse click from the extension", async () => {
+  const page = fakePage(STEPS);
+  const account = page.api.account;
+  let pending = null;
+  page.api.account = (a) => {
+    if (!a.real) return account(a);
+    pending = a;
+    return { press: { x: 640, y: 512 }, kind: a.mode };
+  };
+  page.api.settleAccount = () => account(pending); // the click submitted what was filled
+  const { ctx, out, session } = load(page);
+  await ctx.startRun(5, { jobId: 7 });
+  assert.equal(session.runs[5].state, "review");
+  const clicks = out.debug.filter((d) => d.startsWith("Input.dispatchMouseEvent"));
+  assert.ok(clicks.some((d) => d.includes('"mousePressed"') && d.includes('"x":640') && d.includes('"y":512')));
+  assert.ok(page.calls.includes("settleAccount"));
+});
