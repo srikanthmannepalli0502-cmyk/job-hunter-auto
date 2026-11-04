@@ -166,3 +166,16 @@ test("a saved answer never crosses numbered questions: Address Line 2 isn't Addr
   assert.equal(M.savedAnswer("Address Line 2", answers).status, "unmatched");
   assert.equal(M.savedAnswer("Address line 1", answers).value, "105 Concord Pl");
 });
+
+test("employment at named companies is answered from the work history; relatives and vague ones stay yours", () => {
+  const ctx = { history: { jobs: [{ company: "Syracuse University iSchool", current: true }, { company: "Tata Consultancy Services", current: false }] },
+                job: { company: "Chewy, Inc." } };
+  const a = (q) => M.derived(q, ctx)?.values?.[0] ?? null;
+  assert.equal(a("Are you currently employed by Chewy?"), "No");
+  assert.equal(a("Are you a current or former employee of PetSmart or Chewy?"), "No");
+  assert.equal(a("Have you ever worked for Tata Consultancy Services?"), "Yes");
+  assert.equal(a("Are you currently employed by Tata Consultancy Services?"), "No"); // left in 2024
+  assert.equal(a("Are you currently employed by Syracuse University?"), "Yes");
+  assert.equal(a("Have you previously worked for a government agency?"), null);
+  assert.equal(a("Do you have a relative currently employed by Chewy?"), null);
+});

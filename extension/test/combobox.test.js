@@ -24,9 +24,11 @@ test("an ARIA combobox: read by its question, the company's careers site chosen,
       .replace(/&lt;/g, "<").replace(/&gt;/g, ">");
     const r = JSON.parse(json);
     assert.equal(r.error, undefined);
-    assert.deepEqual(r.questions, ["How did you hear about this role?", "City"]);
+    assert.deepEqual(r.questions.slice(0, 2), ["How did you hear about this role?", "City"]);
     assert.deepEqual(r.kept, { city: "Syracuse" }); // typed, then left: what Workday keeps
     assert.equal(r.before.needsResume, false); // the Resume step's Replace input is hidden on this step
     assert.equal(r.chosen, "Amazon Career Site"); // the saved Comcast answer matches nothing here
     assert.deepEqual(r.fill.skipped, []);
+    assert.equal(r.terms, true); // the terms box, with the setting on
+    assert.equal(r.sms, false);  // never a marketing / SMS box
   });

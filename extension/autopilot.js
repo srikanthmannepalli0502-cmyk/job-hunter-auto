@@ -313,7 +313,8 @@ async function drive(tabId, run, trust) {
 }
 
 async function fillPage(tabId, ctx) {
-  const frames = await inTab(tabId, "fill", ctx);
+  const { consentOnCreate = true } = await chrome.storage.local.get("consentOnCreate");
+  const frames = await inTab(tabId, "fill", { ...ctx, consent: consentOnCreate });
   return { filled: frames.flatMap((f) => f.filled || []), skipped: frames.flatMap((f) => f.skipped || []) };
 }
 async function attachResume(tabId, jobId) {

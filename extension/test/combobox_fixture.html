@@ -22,6 +22,9 @@
   </div>
   <!-- Like Workday's text boxes: the form keeps a value only when focus leaves the box. -->
   <div class="question"><label for="city">City</label><input id="city" type="text"></div>
+  <!-- A terms box is ticked when the settings allow; marketing ones never are. -->
+  <div class="question"><label><input id="terms" type="checkbox"> Yes, I have read and consent to the terms and conditions.</label></div>
+  <div class="question"><label><input id="sms" type="checkbox"> I agree to receive SMS text message updates and marketing offers.</label></div>
   <div class="question-form" id="resume" style="display:none">
     <div class="document-upload"><div class="card"><input id="document-replace-input" class="file-upload" type="file">Replace</div></div>
   </div>
@@ -48,13 +51,15 @@ if (location.search.includes("run")) {
   const api = window.__jobHunterApi, out = {};
   const ctx = { job: { id: 7, company: "Amazon.com Services LLC", found_via: { kind: "company_site", name: "Amazon" } },
                 fields: [{ key: "city", label: "City", keywords: ["city"], exclude: [], value: "Syracuse" }], answers: [{ question: "How did you hear about us?", answer: "Comcast Job Alert" }],
-                history: {}, sensitive: "social security|passport" };
+                history: {}, sensitive: "social security|passport", consent: true };
   (async () => {
     out.before = api.status();
     out.questions = api.questions().questions;
     out.fill = await api.fill(ctx);
     out.chosen = box.textContent;
     out.kept = window.kept;
+    out.terms = document.getElementById("terms").checked;
+    out.sms = document.getElementById("sms").checked;
   })().then(
     () => { document.getElementById("result").textContent = JSON.stringify(out); },
     (e) => { document.getElementById("result").textContent = JSON.stringify({ error: String(e) }); });

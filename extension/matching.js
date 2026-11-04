@@ -273,6 +273,24 @@
       const mine = (ctx.history?.jobs || []).map((j) => norm(generalize(j.company, job.company)));
       return { values: [mine.some((c) => c.includes("the company")) ? "Yes" : "No"], from: "your work history" };
     }
+    // "Are you a current or former employee of Chewy or PetSmart?": the companies it names, against
+    // the employers on your resume. Only named companies (capitalized names after by / for / of / at);
+    // "worked for a government agency" or a relative's employment stays yours.
+    if ((BEFORE.test(l) || /\b(current|former)\b/.test(l)) && EMPLOYED.test(l) && !RELATED.test(l)) {
+      // Capitalized names only, so "a government agency" or "a staffing agency" never counts.
+      const named = [...String(label).matchAll(/\b(?:by|for|of|at|with)\s+((?:[A-Z][\w&.'’-]*)(?:\s+(?:[A-Z][\w&.'’-]*|and|or|&|of))*)/g)]
+        .flatMap((x) => x[1].split(/\s+(?:and|or|&)\s+|,\s*/))
+        .map((n) => n.replace(/\s+(and|or|&|of)$/i, "").replace(/[,.]+$/, "").trim())
+        .filter((n) => n && !/^(the|a|an|any|our|its|this|your|U\.?S\.?)$/i.test(n));
+      if (named.length) {
+        // "Are you currently employed by ..." asks about your job now; "current or former", "ever" about any.
+        const nowOnly = /\b(currently|current)\b/.test(l) && !/\b(former|formerly|previously|ever|before|in the past|past)\b/.test(l);
+        const mine = (ctx.history?.jobs || []).filter((j) => !nowOnly || j.current)
+          .flatMap((j) => companyNames(j.company)).map(norm).filter((n) => n.length > 2);
+        const hit = named.some((n) => mine.some((c) => norm(n).includes(c) || c.includes(norm(n))));
+        return { values: [hit ? "Yes" : "No"], from: `your work history (${named.join(", ")})` };
+      }
+    }
     if (/\b(field of study|major|area of study|discipline)\b/.test(l)) {
       const major = (ctx.fields || []).find((f) => f.key === "major")?.value || ctx.history?.education?.[0]?.major;
       if (!major) return null;

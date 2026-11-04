@@ -8,7 +8,7 @@
 // Which answer and option to use comes from matching.js (injected first). Every value is read back
 // after filling: one the page didn't keep is reported as skipped, not filled.
 (() => {
-  const VERSION = 30;
+  const VERSION = 31;
   if (window.__jobHunterApi && window.__jobHunterApi.version >= VERSION) return;
   const M = window.__jobHunterMatch;
   if (!M) throw new Error("Job Hunter: matching.js must be injected before content.js");
@@ -206,6 +206,8 @@
     }
     return { removed };
   }
+  const TERMS = /\b(read and (agree|consent|accept)|agree to the|consent to the|accept the)\b.*\b(terms|conditions|privacy|policy|policies)\b|\b(terms (and|&) conditions|terms of (use|service))\b.*\b(agree|consent|accept|acknowledge)/i;
+  const NOT_TERMS = /\b(marketing|sms|text message|newsletter|promotion|promotional|offers|job alerts?|subscribe|talent community|share my|third part)/i;
   // Workday's search boxes search only on a full Enter (keydown, keypress, keyup).
   function key(el, k) {
     const code = k === "Enter" ? 13 : 27;
@@ -632,7 +634,18 @@
         note(label, r.option.text, d ? d.from : ans.from, () => r.option.el.checked);
         continue;
       }
-      if (type === "checkbox") continue; // consent and preference boxes are yours to tick
+      if (type === "checkbox") {
+        // The application's own terms box ("I have read and consent to the terms and conditions"),
+        // when your settings allow it, as for account creation. Never marketing, SMS, newsletter or
+        // any other preference box: those are yours.
+        // Workday labels the box on its field, not on the box.
+        const said = `${label} ${clean(formField(el)?.querySelector("label, legend")?.innerText || "")}`;
+        if (ctx.consent && !el.checked && TERMS.test(said) && !NOT_TERMS.test(said)) {
+          el.click();
+          note(label || said.trim(), "ticked", "your settings (terms box)", () => live(el).checked, el);
+        }
+        continue;
+      }
 
       if (isListButton(el)) {
         if (!PLACEHOLDER.test(shownText(el))) continue; // already chosen
