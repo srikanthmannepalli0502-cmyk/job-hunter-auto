@@ -1,0 +1,15 @@
+<!doctype html>
+<meta charset="utf-8">
+<title>Posting with a newsletter box (Stripe-like)</title>
+<!-- A job posting whose only email box is a newsletter sign-up, under a header with "Sign in". -->
+<header><a href="#">Sign in</a></header>
+<h1>Data Scientist, FX Quantitative Research</h1>
+<a href="#apply" id="apply">Apply now</a>
+<footer><form><label for="newsletter-email">Get industry insights and updates from Stripe</label>
+  <input id="newsletter-email" name="email" type="email" placeholder="Enter work email"><button type="submit">Sign up</button></form></footer>
+<pre id="result"></pre>
+<script src="../matching.js"></script>
+<script src="../content.js"></script>
+<script>
+document.getElementById("result").textContent = JSON.stringify(window.__jobHunterApi.status());
+</script>

@@ -8,7 +8,7 @@
 // Which answer and option to use comes from matching.js (injected first). Every value is read back
 // after filling: one the page didn't keep is reported as skipped, not filled.
 (() => {
-  const VERSION = 39;
+  const VERSION = 40;
   if (window.__jobHunterApi && window.__jobHunterApi.version >= VERSION) return;
   const M = window.__jobHunterMatch;
   if (!M) throw new Error("Job Hunter: matching.js must be injected before content.js");
@@ -872,6 +872,7 @@
   // Workday lays a transparent click_filter over its buttons; that's what takes the click.
   const pressButton = (b) => press(b.parentElement?.querySelector(':scope > [data-automation-id="click_filter"]') || b);
 
+  const NEWSLETTER = /\b(newsletter|subscribe|subscription|updates|insights|job alerts?|talent (community|network)|stay (in touch|connected|informed)|marketing|promotions?)\b/i;
   const LOGIN_PAGE = /\b(log ?in|sign ?in|sign ?up|create (an |your )?account|register|verify|verification)\b/i;
   const CREATE_TEXT = /^(create( an| my| your)? account|sign up|register|join( now)?)$/i;
   const SIGNIN_TEXT = /^(sign in|log ?in|continue|next|submit)$/i;
@@ -894,10 +895,19 @@
       const create = !!verify || (!!near(password, CREATE_TEXT) && !near(password, /^(sign in|log ?in)$/i));
       return { kind: create ? "create" : "signin", email, password, verify };
     }
-    const few = controls().length <= 3, words = LOGIN_PAGE.test((document.body?.innerText || "").slice(0, 3000));
+    // An email-first sign-in (amazon.jobs) or a code box: the box's own form must speak of signing in,
+    // not the page (a "Sign in" link in the header), and never a newsletter or job-alert sign-up
+    // (Stripe's job page: "Get industry insights and updates from Stripe").
+    const few = controls().length <= 3;
+    const own = (el) => {
+      const box = el.closest("form, [role=dialog], [role=form]") || el.parentElement?.parentElement?.parentElement || el;
+      const text = `${clean(box.innerText || "").slice(0, 1500)} ${fieldText(el)}`;
+      const heading = clean([...document.querySelectorAll("h1, h2")].find(visible)?.innerText || document.title);
+      return (LOGIN_PAGE.test(text) || LOGIN_PAGE.test(heading)) && !NEWSLETTER.test(text);
+    };
     const code = texts.find((i) => i.autocomplete === "one-time-code" || /\b(code|otp|passcode|pin)\b/i.test(fieldText(i)));
-    if (code && few && words) return { kind: "code", code };
-    if (email && few && words) return { kind: "email", email };
+    if (code && few && own(code)) return { kind: "code", code };
+    if (email && few && own(email)) return { kind: "email", email };
     return null;
   }
   // The posting's own Apply button (before the application starts). On Workday its adventureButton;
