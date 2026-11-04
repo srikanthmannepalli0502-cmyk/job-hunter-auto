@@ -80,13 +80,17 @@ def _ago(dt: datetime | None) -> str:
 
 
 class KitWorker:
-    """Generates resumes / cover notes one at a time in the background (keeps within the LLM's rate limit)."""
+    """Generates resumes / cover notes in the background, a few at once (KIT_WORKERS, default 3).
+    The LLM client waits and retries when the provider's rate limit is hit, so more at once than
+    the limit allows only slows them down."""
 
-    def __init__(self, app: "App"):
+    def __init__(self, app: "App", workers: int | None = None):
         self.app = app
         self.jobs: queue.Queue = queue.Queue()
         self.status: dict[int, str] = {}  # job id -> queued / generating / failed: ... / done note
-        threading.Thread(target=self._loop, daemon=True).start()
+        self.workers = max(1, workers or int(os.getenv("KIT_WORKERS", "3") or 3))
+        for _ in range(self.workers):
+            threading.Thread(target=self._loop, daemon=True).start()
 
     def submit(self, job_id: int, what: str = "resume") -> None:
         if self.status.get(job_id) in ("queued", "generating"):
@@ -164,9 +168,8 @@ class App:
         state = self.worker.status.get(j.id, "")
         if state == "generating":
             return '<span class="tag">resume: generating&hellip;</span>'
-        if state == "queued":  # one resume at a time: say how many are before it (in the order submitted)
-            waiting = [jid for jid, s in self.worker.status.items() if s in ("queued", "generating")]
-            ahead = waiting.index(j.id)
+        if state == "queued":  # waiting for a free worker: how many are before it (in the order submitted)
+            ahead = [jid for jid, s in self.worker.status.items() if s == "queued"].index(j.id)
             return f'<span class="tag">resume: queued{f" ({ahead} ahead)" if ahead > 0 else ""}</span>'
         if state.startswith("failed"):
             return '<span class="tag bad">resume failed</span>'

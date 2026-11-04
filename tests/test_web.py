@@ -315,4 +315,43 @@ def test_queued_resumes_say_how_many_are_ahead(server):
     a, b, c = sorted(app.tracker.top_jobs(limit=5), key=lambda j: j.company)
     app.worker.status.update({a.id: "generating", b.id: "queued", c.id: "queued"})
     assert "generating" in app.resume_state(a)
-    assert "queued (1 ahead)" in app.resume_state(b) and "queued (2 ahead)" in app.resume_state(c)
+    assert "queued</span>" in app.resume_state(b) and "queued (1 ahead)" in app.resume_state(c)
+
+
+def test_resumes_are_made_several_at_once():
+    import threading as th
+    from jobhunter.web import KitWorker
+
+    running, most, lock, go = [0], [0], th.Lock(), th.Event()
+
+    class Fake:
+        profile = tracker = None
+
+    def slow(profile, tracker, job_id):
+        with lock:
+            running[0] += 1
+            most[0] = max(most[0], running[0])
+        go.wait(2)
+        with lock:
+            running[0] -= 1
+        return "r.pdf", []
+
+    import jobhunter.pipeline as pipeline
+    real, pipeline.make_resume = pipeline.make_resume, slow
+    try:
+        w = KitWorker(Fake(), workers=3)
+        for jid in (1, 2, 3, 4):
+            w.submit(jid)
+        for _ in range(100):
+            if most[0] >= 3:
+                break
+            th.Event().wait(0.02)
+        go.set()
+        for _ in range(200):
+            if all(str(w.status.get(j, "")).startswith("Resume ready") for j in (1, 2, 3, 4)):
+                break
+            th.Event().wait(0.02)
+    finally:
+        pipeline.make_resume = real
+    assert most[0] == 3
+    assert all(w.status[j].startswith("Resume ready") for j in (1, 2, 3, 4))
