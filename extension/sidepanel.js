@@ -118,10 +118,9 @@ $("attachCover").addEventListener("click", () => attachFile("cover").catch((e) =
 $("collect").addEventListener("click", async () => {
   if (!ctx) return;
   const frames = await inPage("collect", ctx.sensitive);
-  const known = new Set(ctx.answers.map((a) => a.question.toLowerCase()));
-  const fieldValues = new Set(ctx.fields.map((f) => f.value.toLowerCase()));
-  // Offer only answers that aren't already saved and aren't just your profile basics.
-  const items = frames.flatMap((f) => f.items || []).filter((i) => !known.has(i.question.toLowerCase()) && !fieldValues.has(i.answer.toLowerCase()));
+  // Offer only answers that aren't already saved and aren't what your profile already gives for that
+  // question. (Not "any profile value": every Yes / No dropdown would match some Yes / No field.)
+  const items = frames.flatMap((f) => f.items || []).filter((i) => newAnswer(i, ctx));
   if (!items.length) { $("collectResult").innerHTML = `<span class="muted">Nothing new to save on this page.</span>`; return; }
   $("collectResult").innerHTML =
     `<div>Save these for next time?</div><ul>${items.map((i, n) => `<li><label><input type="checkbox" data-n="${n}" checked> ${esc(i.question.slice(0, 80))}: <b>${esc(i.answer.slice(0, 60))}</b></label></li>`).join("")}</ul>` +

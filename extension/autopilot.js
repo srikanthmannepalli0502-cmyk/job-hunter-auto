@@ -163,6 +163,8 @@ async function drive(tabId, run, trust) {
     // only what's typed into a page that has the keyboard.
     if (WORKDAY_HOST.test(host)) await focusOn(tabId);
     const st = await waitStatus(tabId);
+    // You answered what it stopped on and clicked Continue: keep those answers for next time.
+    if (trust && first && st.form > 0 && !st.account) await saveYours(tabId, await context(tab)).catch(() => {});
     if (!known(st)) {
       // After the confirmation link: back to the application, where it signs in.
       if (run.verified && !run.reopened && run.jobUrl) {
@@ -315,9 +317,22 @@ async function drive(tabId, run, trust) {
     const { filled, skipped } = await fillPage(tabId, c);
     let attached = false;
     if (st.needsResume && c.job?.has_resume && await attachResume(tabId, c.job.id)) {
-      for (let k = 0; k < 40 && (await pageStatus(tabId))?.needsResume; k++) await pause(250); // upload finishing
-      attached = true;
+      // Next only once the upload has finished: Workday shows the file at once, but a step saved
+      // while it's still uploading has no resume ("Enter at least 1 resume/CV" at Submit).
+      let up = null;
+      for (let k = 0; k < 60; k++) {
+        up = (await inTab(tabId, "uploadState").catch(() => [])).find((u) => u.files) || null;
+        if (!up || up.done || up.failed) break;
+        await pause(500);
+      }
+      if (up?.failed) await say(run, `The resume upload failed: ${up.text}`, "warn");
+      else if (up && !up.done) await say(run, "The resume is still uploading after 30 seconds", "warn");
+      attached = !up?.failed;
     }
+    // What this page asked and what was answered or left, for improving the answers (your app's log).
+    api("/api/x/seen", { method: "POST", body: { job_id: c.job?.id || run.jobId || null, host,
+      page: st.step ? `${st.step.n}/${st.step.of} ${st.step.name}` : st.title || "",
+      filled: filled.map((f) => ({ q: f.label, a: String(f.value).slice(0, 200), from: f.from })), skipped } }).catch(() => {});
     await say(run, `filled ${filled.length}${attached ? " and attached your tailored resume (open it on Review to check)" : ""}${skipped.length ? `; left ${skipped.length}: ${skipped.slice(0, 4).map((s) => s.slice(0, 50)).join("; ")}` : ""}`, "muted");
     const yours = skipped.filter((s) => YOURS.test(s));
     const now = { ...st, ...((await pageStatus(tabId)) || {}) }; // after filling, as the page is now
@@ -348,6 +363,17 @@ async function drive(tabId, run, trust) {
     moved();
   }
   return finish(run, "needs_you", "", "It kept going without reaching Review.");
+}
+
+// Your answers on the page (the ones that aren't saved yet, and that your profile doesn't already
+// give), saved for next time; the side panel's "Save my answers from this page" does the same by hand.
+async function saveYours(tabId, ctx) {
+  const frames = await inTab(tabId, "collect", ctx.sensitive);
+  const items = frames.flatMap((f) => f.items || []).filter((i) => newAnswer(i, ctx));
+  if (!items.length) return;
+  const r = await api("/api/x/answers", { method: "POST", body: { items, job_id: ctx.job?.id || null } });
+  const run = (await allRuns())[tabId];
+  if (run && r.saved) await say(run, `Saved ${r.saved} of your answers from this page for next time`, "ok");
 }
 
 async function fillPage(tabId, ctx) {

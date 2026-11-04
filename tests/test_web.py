@@ -355,3 +355,15 @@ def test_resumes_are_made_several_at_once():
         pipeline.make_resume = real
     assert most[0] == 3
     assert all(w.status[j].startswith("Resume ready") for j in (1, 2, 3, 4))
+
+
+def test_the_extension_logs_the_questions_it_met(server):
+    base, app = server()
+    h = {"X-Extension-Key": app.extension_key()}
+    page = {"job_id": 7, "host": "x.wd1.myworkdayjobs.com", "page": "3/5 Application Questions",
+            "filled": [{"q": "Are you currently employed by Chewy?", "a": "No", "from": "your work history"}],
+            "skipped": ["Do you have a relative who works here? (no saved answer)"]}
+    assert httpx.post(f"{base}/api/x/seen", json=page, headers=h).json() == {"saved": True}
+    got = httpx.get(f"{base}/api/x/seen", headers=h).json()["pages"]
+    assert got[-1]["page"] == "3/5 Application Questions" and got[-1]["skipped"] == page["skipped"]
+    assert httpx.get(f"{base}/api/x/seen").status_code == 401

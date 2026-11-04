@@ -37,3 +37,12 @@ async function fileArg(which, jobId) {
   return { base64: btoa(bin), filename: resp.headers.get("X-Filename") || `${which}.pdf`,
            mime: resp.headers.get("Content-Type") || "application/pdf", which };
 }
+
+// An answer you gave on the page that's worth saving: not saved already with that answer, and not
+// what your profile already gives for that question.
+function newAnswer(item, ctx) {
+  const q = item.question.toLowerCase(), a = item.answer.trim().toLowerCase();
+  if ((ctx.answers || []).some((x) => x.question.toLowerCase() === q && x.answer.trim().toLowerCase() === a)) return false;
+  const field = (ctx.fields || []).find((f) => (f.keywords || []).some((k) => q.includes(k.toLowerCase())));
+  return !(field && String(field.value).trim().toLowerCase() === a);
+}

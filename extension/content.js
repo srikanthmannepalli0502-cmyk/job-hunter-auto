@@ -8,7 +8,7 @@
 // Which answer and option to use comes from matching.js (injected first). Every value is read back
 // after filling: one the page didn't keep is reported as skipped, not filled.
 (() => {
-  const VERSION = 36;
+  const VERSION = 37;
   if (window.__jobHunterApi && window.__jobHunterApi.version >= VERSION) return;
   const M = window.__jobHunterMatch;
   if (!M) throw new Error("Job Hunter: matching.js must be injected before content.js");
@@ -1069,6 +1069,16 @@
     start: () => start(),
     account: (a) => account(a),
     settleAccount: (kind) => settleAccount(kind),
+    // The resume upload on this page: {files, done, failed, text}. Workday lists each file as
+    // file-upload-item and says "Successfully Uploaded!" once it's done.
+    uploadState: () => {
+      const items = [...document.querySelectorAll('[data-automation-id="file-upload-item"]')].filter(visible);
+      if (!items.length) return { files: 0 };
+      const text = clean(items.map((i) => i.innerText).join(" "));
+      const busy = items.some((i) => i.querySelector('[role="progressbar"], [data-automation-id*="progress" i], [data-automation-id*="loading" i]'));
+      return { files: items.length, done: /successfully uploaded|upload(ed)? (complete|successful)/i.test(text) && !busy,
+               failed: /fail|error|too large|not supported/i.test(text), text: text.slice(0, 120) };
+    },
     // A link or button by what it says (the sign-in form's "request a verification email").
     pressText: (pattern) => {
       const b = buttons(new RegExp(pattern, "i"))[0];

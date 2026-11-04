@@ -625,6 +625,11 @@ class App:
         return best
 
     # ------------------------------------------------------------------ helpers
+    def seen_log(self) -> Path:
+        """The extension's log of the questions it met on application pages."""
+        self.files_root.mkdir(parents=True, exist_ok=True)
+        return self.files_root / "seen_questions.jsonl"
+
     def file_path(self, raw: str) -> Path | None:
         """Only files inside the tailored-resume folder can be opened."""
         try:
@@ -923,7 +928,10 @@ def make_handler(app: App, port: int):
                                     "value": values[k]}
                                    for k, label, kw in FIELDS if k in saved and values.get(k)],
                         "history": {**work_history(app.resume_text()),
-                                    "skills": skills(app.resume_text(), (job.description or "") if job else "")},
+                                    "skills": skills(app.resume_text(), (job.description or "") if job else ""),
+                                    # companies you applied to through Job Hunter ("Have you applied to us before?")
+                                    "applied": sorted({j.company for a, j in app.tracker.applications()
+                                                       if job is None or a.job_id != job.id})},
                         "answers": [{"question": a.question, "answer": a.answer}
                                     for a in app.tracker.answers() if not a.field],
                         "sensitive": SENSITIVE.pattern,
@@ -970,6 +978,16 @@ def make_handler(app: App, port: int):
                 if method == "POST" and len(parts) == 2 and parts[0] == "opened" and parts[1].isdigit():
                     app.tracker.set_open_when_ready(int(parts[1]), False)
                     return self.send_json({"saved": True})
+                if method == "POST" and parts == ["seen"]:
+                    # What a page asked and what the extension answered or left (one JSON line per page).
+                    entry = {"at": datetime.now(timezone.utc).isoformat(), **{k: data.get(k) for k in ("job_id", "host", "page", "filled", "skipped")}}
+                    with app.seen_log().open("a", encoding="utf-8") as f:
+                        f.write(json.dumps(entry)[:20000] + "\n")
+                    return self.send_json({"saved": True})
+                if method == "GET" and parts == ["seen"]:
+                    log = app.seen_log()
+                    lines = log.read_text(encoding="utf-8").splitlines()[-int(params.get("limit", "100") or 100):] if log.exists() else []
+                    return self.send_json({"pages": [json.loads(x) for x in lines if x.strip()]})
                 if method == "POST" and len(parts) == 2 and parts[0] == "closed" and parts[1].isdigit():
                     # The extension found the posting taken down when it opened it.
                     return self.send_json({"closed": app.tracker.close_jobs(job_ids=[int(parts[1])])})

@@ -273,6 +273,14 @@
       const mine = (ctx.history?.jobs || []).map((j) => norm(generalize(j.company, job.company)));
       return { values: [mine.some((c) => c.includes("the company")) ? "Yes" : "No"], from: "your work history" };
     }
+    // "Have you previously applied to Capital One?": yes when Job Hunter recorded an application there.
+    // Otherwise it's yours: you may have applied without Job Hunter.
+    if (/\b(previously|ever|before|in the past)\b.*\bappl(y|ied)\b|\bappl(y|ied)\b.*\b(before|previously|in the past)\b/.test(l) && !RELATED.test(l)) {
+      const mine = (ctx.history?.applied || []).flatMap((c) => companyNames(c)).map(norm);
+      const here = companyNames(job.company || "").map(norm);
+      if (here.length && mine.some((c) => here.includes(c))) return { values: ["Yes"], from: "your applications in Job Hunter" };
+      return null;
+    }
     // "Are you a current or former employee of Chewy or PetSmart?": the companies it names, against
     // the employers on your resume. Only named companies (capitalized names after by / for / of / at);
     // "worked for a government agency" or a relative's employment stays yours.

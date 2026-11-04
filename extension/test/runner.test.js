@@ -95,7 +95,7 @@ test("from the posting to Review: Apply, sign in or create the account, fill, at
   const { ctx, out, session } = load(page);
   await ctx.startRun(5, { jobId: 7 });
   assert.deepEqual(page.calls.filter((c) => c !== "status"),
-    ["start", "account:signin", "account:create", "fill", "next", "fill", "attach", "next"]);
+    ["start", "account:signin", "account:create", "fill", "next", "fill", "attach", "uploadState", "next"]);
   const run = session.runs[5];
   assert.equal(run.state, "review");
   assert.equal(run.title, "Data Analyst at Comcast");
@@ -262,7 +262,7 @@ test("a Workday step that draws its fields and Next a moment after its title is 
   const { ctx, session } = load(page);
   await ctx.startRun(5, { jobId: 7 });
   assert.equal(session.runs[5].state, "review");
-  assert.deepEqual(page.calls.filter((c) => c !== "status"), ["fill", "next", "fill", "attach", "next"]);
+  assert.deepEqual(page.calls.filter((c) => c !== "status"), ["fill", "next", "fill", "attach", "uploadState", "next"]);
 });
 
 test("a page of only buttons with Skip & continue is a step: it presses it and goes on", async () => {
@@ -293,7 +293,7 @@ test("Workday rejecting the Work Experience dates: the entries are deleted and f
   await ctx.startRun(5, { jobId: 7 });
   assert.equal(redone, 1);
   assert.equal(session.runs[5].state, "review");
-  assert.deepEqual(page.calls.filter((c) => c !== "status"), ["fill", "next", "fill", "attach", "next", "redoWork", "fill", "next"]);
+  assert.deepEqual(page.calls.filter((c) => c !== "status"), ["fill", "next", "fill", "attach", "uploadState", "next", "redoWork", "fill", "next"]);
 });
 
 test("a Workday step runs with the tab told it's focused (Workday keeps dates only then), until the run ends", async () => {
@@ -362,4 +362,32 @@ test("'Verify your account before you sign in': asks for the email again, opens 
   assert.ok(page.calls.includes("pressText"));
   assert.deepEqual(out.opened, ["https://capitalone.wd12.myworkdayjobs.com/verify?t=1"]);
   assert.equal(session.runs[5].state, "review");
+});
+
+test("Next waits until Workday says the resume finished uploading", async () => {
+  const page = fakePage(STEPS);
+  page.view = "app";
+  let polls = 0;
+  page.api.uploadState = () => (page.n === 1 ? { files: 1, done: ++polls >= 3, failed: false, text: "Srikanth.pdf" } : { files: 0 });
+  const next = page.api.next;
+  page.api.next = () => { if (page.n === 1) assert.ok(polls >= 3, "pressed Next before the upload finished"); return next(); };
+  const { ctx, session } = load(page);
+  await ctx.startRun(5, { jobId: 7 });
+  assert.equal(session.runs[5].state, "review");
+});
+
+test("after you answer and click Continue, your new answers on that page are saved", async () => {
+  const page = fakePage([{ name: "Application Questions" }, { name: "Review" }]);
+  page.view = "app";
+  page.api.collect = () => ({ items: [{ question: "Have you ever worked for Chewy?", answer: "No" }] });
+  const { ctx, out } = load(page);
+  ctx.newAnswer = () => true;
+  const saved = [];
+  ctx.api = async (p, o = {}) => {
+    if (p === "/api/x/answers") { saved.push(o.body.items); return { saved: o.body.items.length }; }
+    if (p.startsWith("/api/x/context")) return { job: { id: 7, title: "Data Analyst", company: "Chewy", has_resume: true }, fields: [], answers: [], sensitive: "ssn" };
+    return { saved: true };
+  };
+  await ctx.startRun(5, { jobId: 7, trust: true });
+  assert.deepEqual(saved, [[{ question: "Have you ever worked for Chewy?", answer: "No" }]]);
 });
