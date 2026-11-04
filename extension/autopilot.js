@@ -154,6 +154,9 @@ async function drive(tabId, run, trust) {
     const tab = await chrome.tabs.get(tabId);
     const host = new URL(tab.url || "about:blank").hostname;
     if (/^https?:/.test(tab.url || "") && !IDENTITY_HOST.test(host) && !(run.hosts ||= []).includes(baseDomain(host))) run.hosts.push(baseDomain(host));
+    // On a Workday site from the start: its sign-in / Create Account form, like its dates, keeps
+    // only what's typed into a page that has the keyboard.
+    if (WORKDAY_HOST.test(host)) await focusOn(tabId);
     const st = await waitStatus(tabId);
     if (!known(st)) {
       // After the confirmation link: back to the application, where it signs in.
@@ -247,7 +250,6 @@ async function drive(tabId, run, trust) {
     }
 
     if (st.workday && SIGN_IN_STEP.test(st.step.name)) { await pause(2000); continue; } // its form is still drawing
-    if (st.workday) await focusOn(tabId);
     if (st.workday && st.review) {
       await say(run, "Reached Review. Check every answer and the resume, then submit yourself.", "ok");
       return finish(run, "review", st.step.name, "Check it and submit");
@@ -324,7 +326,7 @@ async function attachResume(tabId, jobId) {
 
 // Workday keeps a typed date only once focus really moves in a page that has the keyboard (your
 // click on the page did it). A run's page doesn't have it: you clicked the side panel, or the tab
-// was opened in the background. So for a Workday step the tab is told it is focused, through
+// was opened in the background. So on a Workday site the tab is told it is focused, through
 // Chrome's debugger (Chrome shows "Job Hunter started debugging this browser" until the run ends).
 // Only that one setting is used; nothing else goes through the debugger.
 const focused = new Set();
