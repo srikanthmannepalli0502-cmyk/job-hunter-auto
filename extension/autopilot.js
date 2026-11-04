@@ -142,10 +142,15 @@ async function drive(tabId, run, trust) {
     await say(run, `Looking in ${login?.email || "your email"} for the site's ${kind === "code" ? "code" : "confirmation link"}`, "muted");
     const r = await fromMail({ email: login?.email, kind, since, hosts: [...(run.hosts || []), new URL((await chrome.tabs.get(tabId)).url).hostname] })
       .catch((e) => ({ error: e.message }));
-    if (r.link || r.code) return r;
+    if (r.link || r.code) { run.mailFrom = null; return r; }
     const yourself = kind === "code" ? "Type the code from the site's email yourself" : "Open the link in the site's email yourself";
     if (r.error) return { stop: await finish(run, "needs_you", where, `${yourself}, then click Continue (${r.error}).`) };
-    if (Date.now() - since > MAIL_WAIT_MS) return { stop: await finish(run, "needs_you", where, `The site's email hasn't come in 10 minutes. ${yourself}, then click Continue.`) };
+    // Ten minutes from the first look, not from `since` (which reaches back for an email already sent).
+    run.mailFrom ||= Date.now();
+    if (Date.now() - run.mailFrom > MAIL_WAIT_MS) {
+      run.mailFrom = null;
+      return { stop: await finish(run, "needs_you", where, `The site's email hasn't come in 10 minutes. ${yourself}, then click Continue.`) };
+    }
     return { stop: await waitHere("the site's email didn't come") }; // looks again on the next check
   };
 
@@ -204,7 +209,9 @@ async function drive(tabId, run, trust) {
           await say(run, p?.pressed ? "Asked the site to send the verification email again" : "Waiting for the site's verification email", "muted");
           await pause(5000);
         }
-        const r = await mail("link", where, run.resentAt - 10 * 60 * 1000);
+        // The account may have been made days or minutes ago: any confirmation email from the past day
+        // (the newest one in Gmail's conversation is opened).
+        const r = await mail("link", where, Date.now() - 24 * 60 * 60 * 1000);
         if ("stop" in r) return;
         await say(run, "Opening the confirmation link from the site's email", "ok");
         await chrome.tabs.update(tabId, { url: r.link });
