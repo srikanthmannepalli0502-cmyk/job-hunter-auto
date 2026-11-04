@@ -8,7 +8,7 @@
 // Which answer and option to use comes from matching.js (injected first). Every value is read back
 // after filling: one the page didn't keep is reported as skipped, not filled.
 (() => {
-  const VERSION = 38;
+  const VERSION = 39;
   if (window.__jobHunterApi && window.__jobHunterApi.version >= VERSION) return;
   const M = window.__jobHunterMatch;
   if (!M) throw new Error("Job Hunter: matching.js must be injected before content.js");
@@ -529,6 +529,16 @@
       }
       return null;
     }
+    if (/education/i.test(sec.kind) && sec.n === 1 && /date|year|attended|from|to/i.test(name)) {
+      // "To (Actual or Expected)": the graduation month on your resume; "From": the profile's degree start.
+      const end = /last|end|to/i.test(name) && !/start|first|from/i.test(name);
+      const raw = end ? ctx.history?.education?.[0]?.end : field("education_start");
+      const m = String(raw || "").match(/([A-Za-z]{3})[a-z]*\.?\s+(\d{4})|(\d{1,2})[/-](\d{4})|^(\d{4})$/);
+      if (!m) return null;
+      const months = ["jan", "feb", "mar", "apr", "may", "jun", "jul", "aug", "sep", "oct", "nov", "dec"];
+      const mm = m[1] ? months.indexOf(m[1].toLowerCase()) + 1 : m[3] ? +m[3] : 0, yyyy = m[2] || m[4] || m[5];
+      return /Month/.test(aid) ? (mm ? String(mm) : null) : /Year/.test(aid) ? yyyy : mm ? `${mm}/${yyyy}` : yyyy;
+    }
     if (/website/i.test(sec.kind) && name === "url") {
       return [field("linkedin"), field("github"), field("website")].filter(Boolean)[sec.n - 1] || null;
     }
@@ -601,12 +611,14 @@
             const mIn = wrap.querySelector('[data-automation-id="dateSectionMonth-input"]');
             const yIn = wrap.querySelector('[data-automation-id="dateSectionYear-input"]');
             const mm = mIn && sectionValue(sec, mIn, ctx), yyyy = yIn && sectionValue(sec, yIn, ctx);
-            if (!mm || !yyyy) continue;
-            const shown = mIn.value === String(+mm) && yIn.value === yyyy;
+            if (!yyyy || (mIn && !mm)) continue;
+            const shown = (!mIn || mIn.value === String(+mm)) && yIn.value === yyyy;
             if (shown && !formField(el)?.querySelector('[data-automation-id*="error" i]')) continue; // already right
-            typeDate(mIn, yIn, String(mm).padStart(2, "0"), yyyy);
-            note(where, `${String(mm).padStart(2, "0")}/${yyyy}`, "master resume",
-                 () => live(mIn).value === String(+mm) && live(yIn).value === yyyy);
+            if (mIn) typeDate(mIn, yIn, String(mm).padStart(2, "0"), yyyy);
+            else { enter(yIn); typeKeys(yIn, yyyy); yIn.dispatchEvent(new FocusEvent("focusout", { bubbles: true })); yIn.blur(); } // a year-only date
+            const shownAs = mIn ? `${String(mm).padStart(2, "0")}/${yyyy}` : yyyy;
+            note(where, shownAs, /education/i.test(sec.kind) ? "your degree dates" : "master resume",
+                 () => (!mIn || live(mIn).value === String(+mm)) && live(yIn).value === yyyy);
             continue;
           }
           if (type === "checkbox") {
