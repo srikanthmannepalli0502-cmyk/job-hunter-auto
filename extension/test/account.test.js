@@ -14,8 +14,8 @@ const CHROME = [
   "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome",
 ].find((p) => p && fs.existsSync(p));
 
-function run() {
-  const url = pathToFileURL(path.join(__dirname, "account_fixture.html")).href + "?run";
+function run(query = "") {
+  const url = pathToFileURL(path.join(__dirname, "account_fixture.html")).href + "?run" + query;
   const dom = execFileSync(CHROME, ["--headless", "--disable-gpu", "--no-sandbox", "--allow-file-access-from-files",
     "--virtual-time-budget=60000", "--dump-dom", url], { encoding: "utf8", timeout: 90000, stdio: ["ignore", "pipe", "ignore"] });
   const json = dom.match(/<pre id="result">([\s\S]*?)<\/pre>/)[1].replace(/&quot;/g, '"').replace(/&amp;/g, "&")
@@ -24,8 +24,9 @@ function run() {
   return JSON.parse(json);
 }
 
-test("Apply, then sign in or create the Workday account with the saved login", { skip: !CHROME && "Chrome not found" }, () => {
-  const r = run();
+for (const [name, query] of [["", ""], [" (form inside step 1 of the progress bar, as on Capital One)", "&inStep"]])
+test("Apply, then sign in or create the Workday account with the saved login" + name, { skip: !CHROME && "Chrome not found" }, () => {
+  const r = run(query);
   assert.equal(r.error, undefined);
   assert.equal(r.posting.posting, true);
   assert.equal(r.posting.account, null);

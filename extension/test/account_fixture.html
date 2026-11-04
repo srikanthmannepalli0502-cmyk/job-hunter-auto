@@ -17,19 +17,22 @@ let view = "posting", signedIn = false;
 window.clicks = [];
 const btn = (id, label) => `<div class="b"><div data-automation-id="click_filter" role="button" aria-label="${label}"
   data-for="${id}" style="position:absolute;width:120px;height:30px"></div><button data-automation-id="${id}" tabindex="-1">${label}</button></div>`;
+// ?inStep: as on Capital One's Workday, the account form sits inside step 1 of the progress bar.
+const bar = location.search.includes("inStep") ? `<ol><li data-automation-id="progressBarActiveStep">current step 1 of 7
+Create Account/Sign In</li></ol>` : "";
 function render() {
   const page = document.getElementById("page");
   if (view === "posting") page.innerHTML = `<h2>Data Analyst</h2><a data-automation-id="adventureButton" role="button" href="#">Apply</a>`;
   if (view === "menu") page.innerHTML = `<div role="dialog"><a data-automation-id="autofillWithResume" href="#">Autofill with Resume</a>
     <a data-automation-id="applyManually" href="#">Apply Manually</a></div>`;
-  if (view === "create") page.innerHTML = `<form><h2>Create Account</h2>
+  if (view === "create") page.innerHTML = bar + `<form><h2>Create Account</h2>
     <label for="e">Email Address*</label><input id="e" data-automation-id="email" type="text">
     <label for="p">Password*</label><input id="p" data-automation-id="password" type="password">
     <label for="v">Verify New Password*</label><input id="v" data-automation-id="verifyPassword" type="password">
     <input type="checkbox" id="c" data-automation-id="createAccountCheckbox"><label for="c">Yes, I have read and consent to the terms</label>
     ${btn("createAccountSubmitButton", "Create Account")}
     <button type="button" data-automation-id="signInLink">Sign In</button></form>`;
-  if (view === "signin") page.innerHTML = `<form><h2>Sign In</h2>
+  if (view === "signin") page.innerHTML = bar + `<form><h2>Sign In</h2>
     <label for="e">Email Address*</label><input id="e" data-automation-id="email" type="text">
     <label for="p">Password*</label><input id="p" data-automation-id="password" type="password">
     ${btn("signInSubmitButton", "Sign In")}

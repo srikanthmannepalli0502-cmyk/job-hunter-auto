@@ -8,7 +8,7 @@
 // Which answer and option to use comes from matching.js (injected first). Every value is read back
 // after filling: one the page didn't keep is reported as skipped, not filled.
 (() => {
-  const VERSION = 32;
+  const VERSION = 33;
   if (window.__jobHunterApi && window.__jobHunterApi.version >= VERSION) return;
   const M = window.__jobHunterMatch;
   if (!M) throw new Error("Job Hunter: matching.js must be injected before content.js");
@@ -864,7 +864,10 @@
   // "email" (the email-first page of a two-page sign-in, as on amazon.jobs) or "code" (a code the
   // site emailed you). Never inside an application step.
   function loginForm() {
-    if (step()) return null;
+    // Never inside an application step, but Capital One's Workday puts the account form in step 1,
+    // "Create Account/Sign In".
+    const s = step();
+    if (s && !/sign ?in|log ?in|create account|register/i.test(s.name)) return null;
     const shown = (sel) => [...document.querySelectorAll(sel)].filter(visible);
     const pw = shown('input[type="password"]');
     const texts = shown('input[type="email"], input[type="text"], input[type="tel"], input:not([type])');
