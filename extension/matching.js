@@ -149,6 +149,15 @@
     if (saved.status === "conflict") return saved;
     const l = norm(label);
     const t = topic(label);
+    // "Are you authorized to work in the United States without employer support or sponsorship?"
+    // asks both at once: your two profile answers, when both are set (and it's about the U.S.).
+    if (/\bauthori[sz]ed to work\b/.test(l) && /\bwithout\b.{0,60}\bsponsor/.test(l) && !FOREIGN.test(l)) {
+      const value = (k) => binaryAnswer((ctx.fields || []).find((f) => f.key === k)?.value || "");
+      const ok = value("work_authorized"), needs = value("needs_sponsorship");
+      if (ok !== undefined && needs !== undefined) {
+        return { status: "matched", value: ok && !needs ? "Yes" : "No", from: "your profile (authorized to work, sponsorship)" };
+      }
+    }
     const words = new Set(l.split(" "));
     let field = null, fieldLen = 0;
     for (const f of ctx.fields || []) {

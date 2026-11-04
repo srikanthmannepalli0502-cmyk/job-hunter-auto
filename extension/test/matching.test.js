@@ -179,3 +179,13 @@ test("employment at named companies is answered from the work history; relatives
   assert.equal(a("Have you previously worked for a government agency?"), null);
   assert.equal(a("Do you have a relative currently employed by Chewy?"), null);
 });
+
+test("authorized to work in the U.S. without sponsorship: both profile answers together", () => {
+  const ctx = (a, s) => ({ fields: [{ key: "work_authorized", keywords: ["authorized to work"], exclude: [], value: a },
+                                    { key: "needs_sponsorship", keywords: ["sponsorship"], exclude: [], value: s }], answers: [], job: {} });
+  const q = "Are you legally authorized to work in the United States without employer support or sponsorship?";
+  assert.equal(M.answerFor(q, ctx("YES", "NO")).value, "Yes");
+  assert.equal(M.answerFor(q, ctx("YES", "YES")).value, "No");
+  assert.equal(M.answerFor(q, ctx("NO", "NO")).value, "No");
+  assert.notEqual(M.answerFor("Are you authorized to work in Canada without sponsorship?", ctx("YES", "NO")).status, "matched");
+});
