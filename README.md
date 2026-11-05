@@ -309,6 +309,10 @@ Each finished resume also gets two checks, shown with the others:
 - **PDF read-back:** the PDF's text is read back the way an ATS parser reads it; your name, email,
   phone, every heading (in order) and the start of every bullet must come back, on one page, with no
   unreadable characters.
+- **Azure layout read-back (optional):** with `AZURE_DOCINTEL_ENDPOINT` set, the PDF also goes through
+  Azure AI Document Intelligence's layout reader (signed in with Entra ID, no key), which splits the
+  page the way commercial parsers do. The note says whether every heading is recognised as a section
+  heading, each entry's dates stay next to it, and every bullet is read. A failed call only skips the note.
 - **Writing score (0-100):** fixed rules flag bullets that start with a weak verb ("responsible
   for", "helped"), use I/my/we, run over 35 words, have no number, or repeat an opening verb 3+
   times in one job. It only points them out.

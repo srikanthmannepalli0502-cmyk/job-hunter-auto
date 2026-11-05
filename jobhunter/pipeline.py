@@ -11,7 +11,7 @@ from pathlib import Path
 
 from loguru import logger
 
-from jobhunter.config import Profile
+from jobhunter.config import Profile, settings
 from jobhunter.liveness import closed_phrase
 from jobhunter.scoring import rank_jobs
 from jobhunter.sources import AdzunaSource, RemotiveSource, dedupe
@@ -244,7 +244,10 @@ def quality_notes(resume_path: str) -> list[str]:
     if not txt or not txt.exists():
         return []
     text = txt.read_text(encoding="utf-8")
-    return [readback.summary(resume_path, text), writing.summary(text)]
+    notes = [readback.summary(resume_path, text)]
+    if settings.azure_docintel_endpoint:
+        notes.append(readback.azure_summary(resume_path, text, settings.azure_docintel_endpoint))
+    return notes + [writing.summary(text)]
 
 
 def resume_text_for(job) -> str:

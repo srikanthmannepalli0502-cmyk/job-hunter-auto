@@ -22,6 +22,8 @@ class Settings:
     azure_openai_endpoint: str = os.getenv("AZURE_OPENAI_ENDPOINT", "")
     azure_openai_deployment: str = os.getenv("AZURE_OPENAI_DEPLOYMENT", "gpt-5-mini")
     azure_openai_api_version: str = os.getenv("AZURE_OPENAI_API_VERSION", "2025-04-01-preview")
+    # Azure AI Document Intelligence, for reading each resume PDF back as a parser does (optional).
+    azure_docintel_endpoint: str = os.getenv("AZURE_DOCINTEL_ENDPOINT", "")
     adzuna_app_id: str = os.getenv("ADZUNA_APP_ID", "")
     adzuna_app_key: str = os.getenv("ADZUNA_APP_KEY", "")
     database_url: str = os.getenv("DATABASE_URL", "sqlite:///jobhunter.db")

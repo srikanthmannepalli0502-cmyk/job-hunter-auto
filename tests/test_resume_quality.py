@@ -61,3 +61,65 @@ def test_writing_score_and_repeated_openers():
     assert [b for b, _ in flagged] == ["Built 1 thing", "Built 2 things", "Built 3 things", "Helped with reports"]
     assert score == round((90 * 3 + 100 + 55) / 5)
     assert writing.summary(RESUME).startswith("Writing score 100/100")
+
+
+LAYOUT = {"pages": [{}], "paragraphs": [
+    {"content": "Sam Doe", "role": "title"},
+    {"content": "sam.doe@example.com | +1 315 555 0100 | Syracuse, NY"},
+    {"content": "SUMMARY", "role": "sectionHeading"},
+    {"content": "Data analyst who builds reliable reporting with SQL, Python and Power BI for business teams."},
+    {"content": "SKILLS", "role": "sectionHeading"},
+    {"content": "SQL, Python, Power BI, Tableau, Excel, dbt, Azure"},
+    {"content": "EXPERIENCE", "role": "sectionHeading"},
+    {"content": "Acme Corp | Data Analyst"},
+    {"content": "Jan 2023 - Present"},
+    {"content": "Built 12 Power BI dashboards used weekly by 40 managers across sales and finance"},
+    {"content": "Cut a monthly reporting job from 6 hours to 20 minutes by moving it to dbt on Azure"},
+    {"content": "Automated data quality checks on 3 pipelines, catching 95% of bad loads before reports refreshed"},
+    {"content": "PROJECTS", "role": "sectionHeading"},
+    {"content": "H-1B Tracker | Python, dbt, DuckDB"},
+    {"content": "Modeled 1.5M labor filings into tested marts and a public dashboard"},
+    {"content": "EDUCATION", "role": "sectionHeading"},
+    {"content": "Syracuse University | MS Applied Data Science"},
+    {"content": "Aug 2024 - May 2026"},
+]}
+
+
+def test_layout_that_matches_the_resume_has_no_problems():
+    assert readback.layout_problems(LAYOUT, RESUME) == []
+
+
+def test_layout_problems_are_named():
+    import copy
+
+    bad = copy.deepcopy(LAYOUT)
+    bad["paragraphs"][4]["role"] = ""  # SKILLS read as body text
+    moved = bad["paragraphs"].pop(8)  # Acme's dates end up at the bottom
+    bad["paragraphs"].append(moved)
+    bad["pages"].append({})
+    problems = "; ".join(readback.layout_problems(bad, RESUME))
+    assert "2 pages" in problems
+    assert "not recognised as section headings: SKILLS" in problems
+    assert '"Jan 2023 - Present" reads away from "Acme Corp | Data Analyst"' in problems
+
+
+def test_azure_call_is_keyless_and_failures_never_raise(tmp_path):
+    import httpx
+
+    pdf = format_to_pdf(RESUME, str(tmp_path / "resume"))
+    seen = []
+
+    def handler(request):
+        seen.append(request.headers.get("authorization"))
+        if request.method == "POST":
+            return httpx.Response(202, headers={"operation-location": "https://di.example/op/1"})
+        return httpx.Response(200, json={"status": "succeeded", "analyzeResult": LAYOUT})
+
+    client = httpx.Client(transport=httpx.MockTransport(handler))
+    note = readback.azure_summary(pdf, RESUME, "https://di.example/", client=client, token="t0k")
+    assert note.startswith("Azure layout read-back: 5 section headings recognised")
+    assert seen == ["Bearer t0k", "Bearer t0k"]  # Entra ID token, never an API key
+
+    down = httpx.Client(transport=httpx.MockTransport(lambda r: httpx.Response(503)))
+    assert readback.azure_summary(pdf, RESUME, "https://di.example/", client=down, token="t0k").startswith(
+        "Azure layout read-back skipped")
