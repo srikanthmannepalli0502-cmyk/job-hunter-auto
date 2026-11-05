@@ -24,7 +24,7 @@ function run(query = "") {
   return JSON.parse(json);
 }
 
-for (const [name, query] of [["", ""], [" (form inside step 1 of the progress bar, as on Capital One)", "&inStep"]])
+for (const [name, query] of [["", ""], [" (form inside step 1 of the progress bar, as on Capital One)", "&inStep"], [" (inside a step with no name, as on Northeastern)", "&inStep&noName"]])
 test("Apply, then sign in or create the Workday account with the saved login" + name, { skip: !CHROME && "Chrome not found" }, () => {
   const r = run(query);
   assert.equal(r.error, undefined);

@@ -18,8 +18,9 @@ window.clicks = [];
 const btn = (id, label) => `<div class="b"><div data-automation-id="click_filter" role="button" aria-label="${label}"
   data-for="${id}" style="position:absolute;width:120px;height:30px"></div><button data-automation-id="${id}" tabindex="-1">${label}</button></div>`;
 // ?inStep: as on Capital One's Workday, the account form sits inside step 1 of the progress bar.
+// ?noName: as on Northeastern's Workday, that step has no name at all.
 const bar = location.search.includes("inStep") ? `<ol><li data-automation-id="progressBarActiveStep">current step 1 of 7
-Create Account/Sign In</li></ol>` : "";
+${location.search.includes("noName") ? "" : "Create Account/Sign In"}</li></ol>` : "";
 function render() {
   const page = document.getElementById("page");
   if (view === "posting") page.innerHTML = `<h2>Data Analyst</h2><a data-automation-id="adventureButton" role="button" href="#">Apply</a>`;
