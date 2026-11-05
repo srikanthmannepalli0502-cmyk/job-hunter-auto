@@ -42,7 +42,9 @@ async function pageStatus(tabId) {
 }
 // A page the run can act on. A page of only buttons counts when one is Next / Skip & continue
 // (amazon.jobs's SMS updates) or Submit.
-const known = (st) => st && (st.workday || st.account || st.posting || st.closed || st.captcha || st.verifyEmail ||
+// A sign-in page that first asks how: "Sign in with Google" or "Sign in with email" (Northeastern).
+const EMAIL_CHOICE = "^(sign in|log in|continue|sign up|create (an )?account) with (your )?e-?mail( address)?$";
+const known = (st) => st && (st.workday || st.account || st.posting || st.closed || st.captcha || st.verifyEmail || st.emailChoice ||
                              st.form > 0 || st.next || st.review);
 async function waitStatus(tabId, tries = 8) {
   let st = null;
@@ -182,6 +184,13 @@ async function drive(tabId, run, trust) {
       if (run.jobId) await api(`/api/x/closed/${run.jobId}`, { method: "POST", body: {} }).catch(() => {});
       return finish(run, "stopped", where, `The posting is closed ("${st.closed}"). Marked closed in Job Hunter; the next shortlisted job opens next.`);
     }
+    if (st.emailChoice && !st.account && loginSite(run, host) && (run.emailChoices = (run.emailChoices || 0) + 1) <= 3) {
+      await say(run, "Choosing \"Sign in with email\"", "muted");
+      await inTab(tabId, "pressText", EMAIL_CHOICE, true).catch(() => []);
+      moved();
+      await pause(2500);
+      continue;
+    }
     if (st.captcha) return finish(run, "needs_you", where, "The page shows a CAPTCHA. Solve it yourself, then click Continue.");
     if (st.verifyEmail && !st.account && !st.posting) {
       const r = await mail("link", where);
@@ -314,7 +323,7 @@ async function drive(tabId, run, trust) {
     if (st.workday && (st.form < 2 || !st.next) && run.drawing.waits++ < 10) { await pause(1500); continue; }
     const c = await context(tab);
     await say(run, st.step ? `Step ${st.step.n} of ${st.step.of}: ${st.step.name}` : `Page ${run.pages + 1}: ${st.title || host}`, "step");
-    const { filled, skipped } = await fillPage(tabId, c);
+    let { filled, skipped } = await fillPage(tabId, c);
     let attached = false;
     if (st.needsResume && c.job?.has_resume && await attachResume(tabId, c.job.id)) {
       // Next only once the upload has finished: Workday shows the file at once, but a step saved
@@ -329,6 +338,14 @@ async function drive(tabId, run, trust) {
       else if (up && !up.done) await say(run, "The resume is still uploading after 30 seconds", "warn");
       attached = !up?.failed;
     }
+    // Greenhouse redraws its form after a resume upload (and sometimes on load), dropping what was
+    // typed: fill again (only empty boxes are touched) while it reports values it didn't keep.
+    for (let again = 0; again < 2 && (attached && again === 0 || skipped.some((s) => /didn't keep/.test(s))); again++) {
+      await pause(2000);
+      const more = await fillPage(tabId, c);
+      filled = [...filled.filter((f) => !more.filled.some((m) => m.label === f.label)), ...more.filled];
+      skipped = more.skipped;
+    }
     // What this page asked and what was answered or left, for improving the answers (your app's log).
     api("/api/x/seen", { method: "POST", body: { job_id: c.job?.id || run.jobId || null, host,
       page: st.step ? `${st.step.n}/${st.step.of} ${st.step.name}` : st.title || "",
@@ -337,6 +354,10 @@ async function drive(tabId, run, trust) {
     const yours = skipped.filter((s) => YOURS.test(s));
     const now = { ...st, ...((await pageStatus(tabId)) || {}) }; // after filling, as the page is now
     if (now.review || (!now.next && ONE_PAGE_HOST.test(host))) {
+      const empty = st.workday ? [] : (await inTab(tabId, "requiredEmpty").catch(() => [])).flat();
+      if (empty.length) {
+        return finish(run, "needs_you", where || "the form", `${empty.length} required question${empty.length > 1 ? "s are" : " is"} still empty: ${empty.slice(0, 4).join("; ")}. Answer ${empty.length > 1 ? "them" : "it"}, then submit.`, empty);
+      }
       await say(run, "Reached the last page. Check every answer and the resume, then submit yourself.", "ok");
       return finish(run, "review", where || "the form", skipped.length ? `Filled. Answer the ${skipped.length} left, then submit.` : "Check it and submit");
     }

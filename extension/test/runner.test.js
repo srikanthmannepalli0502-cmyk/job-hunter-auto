@@ -95,7 +95,7 @@ test("from the posting to Review: Apply, sign in or create the account, fill, at
   const { ctx, out, session } = load(page);
   await ctx.startRun(5, { jobId: 7 });
   assert.deepEqual(page.calls.filter((c) => c !== "status"),
-    ["start", "account:signin", "account:create", "fill", "next", "fill", "attach", "uploadState", "next"]);
+    ["start", "account:signin", "account:create", "fill", "next", "fill", "attach", "uploadState", "fill", "next"]);
   const run = session.runs[5];
   assert.equal(run.state, "review");
   assert.equal(run.title, "Data Analyst at Comcast");
@@ -214,7 +214,7 @@ test("amazon.jobs: Apply, the email-first sign-in, then each page with Next up t
   const { ctx, out, session } = load(page);
   await ctx.startRun(5, { jobId: 7 });
   assert.deepEqual(page.calls.filter((c) => c !== "status"),
-    ["start", "account:email", "account:signin", "fill", "next", "fill", "next", "fill"]);
+    ["start", "account:email", "account:signin", "fill", "next", "fill", "next", "fill", "requiredEmpty"]);
   assert.equal(session.runs[5].state, "review");
   assert.equal(out.notes.at(-1).title, "Ready to submit: Data Analyst at Comcast"); // names the job: many fill at once
 });
@@ -262,7 +262,7 @@ test("a Workday step that draws its fields and Next a moment after its title is 
   const { ctx, session } = load(page);
   await ctx.startRun(5, { jobId: 7 });
   assert.equal(session.runs[5].state, "review");
-  assert.deepEqual(page.calls.filter((c) => c !== "status"), ["fill", "next", "fill", "attach", "uploadState", "next"]);
+  assert.deepEqual(page.calls.filter((c) => c !== "status"), ["fill", "next", "fill", "attach", "uploadState", "fill", "next"]);
 });
 
 test("a page of only buttons with Skip & continue is a step: it presses it and goes on", async () => {
@@ -293,7 +293,7 @@ test("Workday rejecting the Work Experience dates: the entries are deleted and f
   await ctx.startRun(5, { jobId: 7 });
   assert.equal(redone, 1);
   assert.equal(session.runs[5].state, "review");
-  assert.deepEqual(page.calls.filter((c) => c !== "status"), ["fill", "next", "fill", "attach", "uploadState", "next", "redoWork", "fill", "next"]);
+  assert.deepEqual(page.calls.filter((c) => c !== "status"), ["fill", "next", "fill", "attach", "uploadState", "fill", "next", "redoWork", "fill", "next"]);
 });
 
 test("a Workday step runs with the tab told it's focused (Workday keeps dates only then), until the run ends", async () => {
@@ -390,4 +390,25 @@ test("after you answer and click Continue, your new answers on that page are sav
   };
   await ctx.startRun(5, { jobId: 7, trust: true });
   assert.deepEqual(saved, [[{ question: "Have you ever worked for Chewy?", answer: "No" }]]);
+});
+
+test("a one-page form's last page with required questions still empty needs you, naming them", async () => {
+  const page = otherSite();
+  page.api.requiredEmpty = () => (page.n === 2 ? ["What is the highest level of education you have completed?"] : []);
+  const { ctx, out, session } = load(page);
+  await ctx.startRun(5, { jobId: 7 });
+  assert.equal(session.runs[5].state, "needs_you");
+  assert.match(out.notes.at(-1).message, /required question is still empty: What is the highest level of education/);
+});
+
+test("'Sign in with email' (next to 'Sign in with Google') is pressed, never Google", async () => {
+  const page = otherSite();
+  const status = page.api.status;
+  let chose = false;
+  page.api.status = () => (page.view === "email" && !chose ? { ...status(), signIn: false, account: null, emailChoice: true } : status());
+  page.api.pressText = (pattern) => { assert.match("Sign in with email", new RegExp(pattern, "i")); assert.doesNotMatch("Sign in with Google", new RegExp(pattern, "i")); chose = true; return { pressed: true }; };
+  const { ctx, session } = load(page);
+  await ctx.startRun(5, { jobId: 7 });
+  assert.ok(chose);
+  assert.equal(session.runs[5].state, "review");
 });

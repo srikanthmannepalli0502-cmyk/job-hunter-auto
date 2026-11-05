@@ -8,7 +8,7 @@
 // Which answer and option to use comes from matching.js (injected first). Every value is read back
 // after filling: one the page didn't keep is reported as skipped, not filled.
 (() => {
-  const VERSION = 44;
+  const VERSION = 45;
   if (window.__jobHunterApi && window.__jobHunterApi.version >= VERSION) return;
   const M = window.__jobHunterMatch;
   if (!M) throw new Error("Job Hunter: matching.js must be injected before content.js");
@@ -996,7 +996,8 @@
              needsResume: needsResume(), signIn: !!login, account: login ? login.kind : null,
              posting, closed, captcha: captcha(),
              verifyEmail: /verify your (email|account)|verification (email|link)|activate your account|confirm your email/i.test(text),
-             form, fields: fields().length, errors: pageErrors(), title: clean(document.querySelector("h1, h2")?.innerText || document.title).slice(0, 80) };
+             form, fields: fields().length, errors: pageErrors(),
+             emailChoice: !login && buttons(/^(sign in|log in|continue|sign up|create (an )?account) with (your )?e-?mail( address)?$/i).length > 0, title: clean(document.querySelector("h1, h2")?.innerText || document.title).slice(0, 80) };
   }
 
   // On the posting: press Apply, then (Workday) "Apply Manually": Job Hunter fills the form itself,
@@ -1141,6 +1142,25 @@
     settleAccount: (kind) => settleAccount(kind),
     // The resume upload on this page: {files, done, failed, text}. Workday lists each file as
     // file-upload-item and says "Successfully Uploaded!" once it's done.
+    // Required questions with nothing in them (marked required, or "*" by their label): what's left
+    // for you before submitting a one-page form.
+    requiredEmpty: () => {
+      const out = [], seen = new Set();
+      for (const el of controls()) {
+        const type = (el.type || "").toLowerCase();
+        if (type === "file" || type === "checkbox") continue;
+        const key = type === "radio" ? `radio:${el.name}` : el;
+        if (seen.has(key)) continue;
+        seen.add(key);
+        const box = el.closest(".field, .form-group, [class*='question'], fieldset, [class*='field']") || el.parentElement;
+        const marked = el.required || el.getAttribute("aria-required") === "true" || /\*/.test(box?.querySelector("label, legend")?.textContent || "");
+        if (!marked) continue;
+        const has = type === "radio" ? [...document.getElementsByName(el.name)].some((r) => r.checked)
+          : isListButton(el) ? !PLACEHOLDER.test(shownText(el)) : hasValue(el) || hasSelection(el);
+        if (!has) out.push((type === "radio" ? radioQuestion(el) : labelOf(el)).slice(0, 90));
+      }
+      return out.filter(Boolean);
+    },
     uploadState: () => {
       const items = [...document.querySelectorAll('[data-automation-id="file-upload-item"]')].filter(visible);
       if (!items.length) return { files: 0 };
