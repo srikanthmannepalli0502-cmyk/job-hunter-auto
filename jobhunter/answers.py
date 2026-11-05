@@ -35,6 +35,7 @@ FIELDS = [
                                                                               "visa status", "require a visa"]),
     ("work_status", "Current work status (e.g. F-1, OPT)", ["immigration status", "current visa", "work permit"]),
     ("relocate", "Willing to relocate?", ["relocate", "relocation"]),
+    ("adult", "18 years old or older?", ["18 years", "18 or older", "at least 18", "age of 18", "over 18", "legal working age"]),
     ("relatives", "Relatives or close relationships working at the company you apply to?",
      ["relatives", "relative", "family member", "family members", "covered relationship", "related to an employee",
       "related to anyone"]),
@@ -58,7 +59,7 @@ EXCLUDE = {
     "country": ["phone", "code", "citizenship"],
     "state": ["statement", "status"],
     "city": ["citizenship", "ethnicity"],
-    "school": ["high school"],
+    "school": ["high school", "employee", "employed", "worked", "student at", "work in"],
     "start_date": ["from", "to"],
     "email": ["confirm", "re-enter", "retype"],
 }

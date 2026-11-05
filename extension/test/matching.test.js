@@ -198,3 +198,14 @@ test("highest education completed, while the resume's degree is still in progres
   assert.equal(M.derived("What is the highest level of education you have completed?", ctx), null);
   assert.equal(M.derived("Education level", ctx).values[0], "Master's Degree"); // no "completed": the degree it is
 });
+
+test("Northeastern's questions: student or employee there, worked at a university, sponsorship in the future", () => {
+  const ctx = { history: { jobs: [{ company: "Syracuse University iSchool", current: true }, { company: "Tata Consultancy Services" }],
+                           education: [{ school: "Syracuse University", end: "Dec 2026" }] },
+                job: { company: "Northeastern University" }, answers: [],
+                fields: [{ key: "needs_sponsorship", label: "Sponsorship", keywords: ["sponsorship", "sponsor"], exclude: [], value: "NO" }] };
+  assert.deepEqual(M.derived("Have you been an employee or a student at Northeastern University?", ctx).values, ["No"]);
+  assert.deepEqual(M.derived("Have you been a student at Syracuse University?", ctx).values, ["Yes"]);
+  assert.deepEqual(M.derived("Have you worked in a postsecondary educational institution?", ctx).values, ["Yes"]);
+  assert.equal(M.answerFor("At any time in the future, will you require the university to sponsor you for a work permit?", ctx).value, "No");
+});

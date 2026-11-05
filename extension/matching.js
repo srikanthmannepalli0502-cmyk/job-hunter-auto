@@ -167,6 +167,12 @@
         return { status: "matched", value: ok && !needs ? "Yes" : "No", from: "your profile (authorized to work, sponsorship)" };
       }
     }
+    // "In the future, will you require sponsorship?": your answer for now-or-later is No, so No for
+    // any time. (A Yes doesn't say which time; that stays yours.)
+    if (t === "sponsorship" && NEED.test(l) && !INVERTED.test(l) && !FOREIGN.test(l)) {
+      const f = (ctx.fields || []).find((x) => x.key === "needs_sponsorship");
+      if (f && binaryAnswer(f.value) === false) return { status: "matched", value: "No", from: f.label || "your profile (sponsorship)" };
+    }
     const words = new Set(l.split(" "));
     let field = null, fieldLen = 0;
     for (const f of ctx.fields || []) {
@@ -314,7 +320,13 @@
     // "Are you a current or former employee of Chewy or PetSmart?": the companies it names, against
     // the employers on your resume. Only named companies (capitalized names after by / for / of / at);
     // "worked for a government agency" or a relative's employment stays yours.
-    if ((BEFORE.test(l) || /\b(current|former)\b/.test(l)) && EMPLOYED.test(l) && !RELATED.test(l)) {
+    // "Have you worked in a postsecondary educational institution?" (a university or college): your jobs.
+    if (/\b(postsecondary|post secondary|higher education|college or university|university or college|academic institution)\b/.test(l)
+        && /\b(work|worked|working|employed|employment)\b/.test(l) && !RELATED.test(l)) {
+      const at = (ctx.history?.jobs || []).some((j) => /\b(university|college|institute of technology|community college)\b/i.test(j.company || ""));
+      return { values: [at ? "Yes" : "No"], from: "your work history" };
+    }
+    if ((BEFORE.test(l) || /\b(current|former)\b|\bhave you (ever )?been an?\b/.test(l)) && (EMPLOYED.test(l) || /\bstudent\b/.test(l)) && !RELATED.test(l)) {
       // Capitalized names only, so "a government agency" or "a staffing agency" never counts.
       const named = [...String(label).matchAll(/\b(?:by|for|of|at|with)\s+((?:[A-Z][\w&.'’-]*)(?:\s+(?:[A-Z][\w&.'’-]*|and|or|&|of))*)/g)]
         .flatMap((x) => x[1].split(/\s+(?:and|or|&)\s+|,\s*/))
@@ -323,8 +335,10 @@
       if (named.length) {
         // "Are you currently employed by ..." asks about your job now; "current or former", "ever" about any.
         const nowOnly = /\b(currently|current)\b/.test(l) && !/\b(former|formerly|previously|ever|before|in the past|past)\b/.test(l);
-        const mine = (ctx.history?.jobs || []).filter((j) => !nowOnly || j.current)
-          .flatMap((j) => companyNames(j.company)).map(norm).filter((n) => n.length > 2);
+        const mine = [...(ctx.history?.jobs || []).filter((j) => !nowOnly || j.current).map((j) => j.company),
+                      // "an employee or a student at ...": the schools on your resume count too
+                      ...(/\bstudent\b/.test(l) ? (ctx.history?.education || []).map((e) => e.school) : [])]
+          .flatMap((c) => companyNames(c || "")).map(norm).filter((n) => n.length > 2);
         const hit = named.some((n) => mine.some((c) => norm(n).includes(c) || c.includes(norm(n))));
         return { values: [hit ? "Yes" : "No"], from: `your work history (${named.join(", ")})` };
       }

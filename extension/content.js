@@ -8,7 +8,7 @@
 // Which answer and option to use comes from matching.js (injected first). Every value is read back
 // after filling: one the page didn't keep is reported as skipped, not filled.
 (() => {
-  const VERSION = 43;
+  const VERSION = 44;
   if (window.__jobHunterApi && window.__jobHunterApi.version >= VERSION) return;
   const M = window.__jobHunterMatch;
   if (!M) throw new Error("Job Hunter: matching.js must be injected before content.js");
@@ -953,6 +953,9 @@
   // The page's own boxes, not a careers site's job search (keyword, location and its latitude/longitude).
   const fields = () => controls().filter((c) => !/search|keyword|location|where|what|latitude|longitude/i.test(fieldText(c)));
   function applyButton() {
+    // Workday's "Apply Manually" (its start page can sit inside step 1 of the progress bar).
+    const manual = byId("applyManually");
+    if (manual) return manual;
     if (step()) return null;
     const wd = byId("adventureButton");
     if (wd) return wd;
@@ -999,6 +1002,13 @@
   // On the posting: press Apply, then (Workday) "Apply Manually": Job Hunter fills the form itself,
   // so Workday's own resume parsing isn't used. Nothing here is a submit button.
   async function start() {
+    const manual = byId("applyManually");
+    if (manual) { // already on Workday's start page: Apply Manually, and wait for the next screen
+      const was = step()?.name;
+      pressButton(manual);
+      for (let k = 0; k < 40 && byId("applyManually") && step()?.name === was && !loginForm(); k++) await sleep(250);
+      return { started: true };
+    }
     const apply = applyButton();
     if (!apply || !/apply|application/i.test(clean(apply.innerText) + " " + say(apply))) return { started: false, reason: "no Apply button" };
     // A link that would open a new tab is followed in this one, where the run carries on.
